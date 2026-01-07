@@ -120,20 +120,6 @@
 - [ ] **API Documentation:** Complete guide for hotkeys and developer instructions.
 
 ---
-
-### 👥 Team Roles
-
-**Graphics & Math Lead (You):**
-- Focus on Phase 2 (Lights, Optimization, Shaders).
-- Collision mathematics from Phase 4.
-- Vulkan pipeline maintenance.
-
-**Tooling & UX Lead (Friend):**
-- Focus on Phase 1 (File splitting, Hierarchy logic).
-- Phase 3 implementation (Grid, Asset browser, Material UI).
-- General ImGui management.
-
----
 *Development Roadmap for NLSDFE Engine - January 2026*
 ---
 
