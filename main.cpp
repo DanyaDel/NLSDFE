@@ -714,9 +714,15 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
                     sceneObjects[idx].scale.y += axis.y * deltaS;
                     sceneObjects[idx].scale.z += axis.z * deltaS;
                 }
-                sceneObjects[idx].scale.x = std::max(std::abs(sceneObjects[idx].scale.x), 0.001f);
-                sceneObjects[idx].scale.y = std::max(std::abs(sceneObjects[idx].scale.y), 0.001f);
-                sceneObjects[idx].scale.z = std::max(std::abs(sceneObjects[idx].scale.z), 0.001f);
+                auto fixZero = [](float& val) {
+                    if (std::abs(val) < 0.001f) {
+                        val = (val >= 0) ? 0.001f : -0.001f;
+                    }
+                };
+
+                fixZero(sceneObjects[idx].scale.x);
+                fixZero(sceneObjects[idx].scale.y);
+                fixZero(sceneObjects[idx].scale.z);
             }
         }
     }
@@ -1705,6 +1711,7 @@ private:
                 ImGui::BulletText("Fixed: Shift+D spam during movement");
                 ImGui::BulletText("Added: Ctrl+C / Ctrl+V support");
                 ImGui::BulletText("Added: Toast notifications");
+                ImGui::BulletText("Fixed: now, when scaling an object using negative values, the object is inverted.");
 
                 ImGui::Dummy(ImVec2(0, 10));
             
