@@ -54,6 +54,8 @@ bool showSettingsWindow = false;
 int selectedSettingsTab = 0;   
 bool triggerSceneContextMenu = false;
 
+bool showChangelog = true; // Чтобы менюшка с фиксами открылась при запуске
+
 // Shading Modes
 // 0=Wire/Heat, 1=Solid, 2=Material, 3=Rendered
 int currentShadingMode = 1; 
@@ -215,6 +217,12 @@ struct ObjectData {
     vec4 rotationEuler; 
 };
 
+struct Notification {
+    std::string message;
+    float timer = 0.0f;
+    bool active = false;
+};
+
 // --- NOS HEADER & METADATA ---
 struct NosHeader {
     char magic[4];           // "NOS!"
@@ -257,6 +265,8 @@ struct PushConstants {
 
 std::vector<ObjectData> sceneObjects;
 std::vector<int> selectedIndices; 
+std::vector<ObjectData> clipboard;
+Notification toast;
 
 // --- Undo System ---
 struct UndoState {
@@ -337,6 +347,12 @@ bool projectWorldToScreen(vec3 worldPos, float width, float height, vec2& outScr
     outScreen.x = (x * height + width) * 0.5f;
     outScreen.y = (height - y * height) * 0.5f;
     return true;
+}
+
+void showToast(std::string text) {
+    toast.message = text;
+    toast.timer = 3.0f; // Будет висеть 3 секунды
+    toast.active = true;
 }
 
 vec3 getSelectionCenter() {
@@ -698,6 +714,9 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
                     sceneObjects[idx].scale.y += axis.y * deltaS;
                     sceneObjects[idx].scale.z += axis.z * deltaS;
                 }
+                sceneObjects[idx].scale.x = std::max(std::abs(sceneObjects[idx].scale.x), 0.001f);
+                sceneObjects[idx].scale.y = std::max(std::abs(sceneObjects[idx].scale.y), 0.001f);
+                sceneObjects[idx].scale.z = std::max(std::abs(sceneObjects[idx].scale.z), 0.001f);
             }
         }
     }
@@ -756,11 +775,52 @@ void processInput(GLFWwindow* window, float deltaTime) {
     if (glfwGetKey(window, GLFW_KEY_DELETE) == GLFW_PRESS) {
         if (!delPressed) { deleteSelectedObject(); delPressed = true; }
     } else delPressed = false;
-
-    static bool dPressed = false;
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS && (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)) {
-        if (!dPressed) { duplicateSelectedObject(); dPressed = true; }
-    } else dPressed = false;
+    // --- КОПИРОВАНИЕ (Ctrl + C) ---
+    static bool cPressed = false;
+    if (glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS && glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) {
+        if (!cPressed && !selectedIndices.empty()) {
+            clipboard.clear();
+            for (int idx : selectedIndices) {
+                if (idx < sceneObjects.size()) clipboard.push_back(sceneObjects[idx]);
+            }
+            std::string name = (clipboard.size() == 1) ? "Object" : std::to_string(clipboard.size()) + " Objects";
+            showToast("Copied " + name);
+            std::cout << "[Editor] Copied " << clipboard.size() << " objects." << std::endl;
+            cPressed = true;
+        }
+    } else cPressed = false;
+    
+    // --- ВСТАВКА (Ctrl + V) ---
+    static bool vPressed = false;
+    if (glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS && glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) {
+        if (!vPressed && !clipboard.empty()) {
+            saveUndo(); // Запоминаем состояние для Ctrl+Z
+            selectedIndices.clear();
+            for (const auto& obj : clipboard) {
+                if (sceneObjects.size() >= MAX_OBJECTS) break;
+                
+                ObjectData newObj = obj;
+                // Сдвигаем вставленный объект чуть-чуть, чтобы он не сливался с оригиналом
+                newObj.position.x += 0.5f; 
+                newObj.position.z += 0.5f;
+                
+                sceneObjects.push_back(newObj);
+                selectedIndices.push_back((int)sceneObjects.size() - 1);
+            }
+            showToast("Pasted " + std::to_string(clipboard.size()) + " Objects");
+            vPressed = true;
+        }
+    } else vPressed = false;
+    
+    // --- СТАРЫЙ ДУБЛИКАТ (Shift + D) - ПЕРЕДЕЛЫВАЕМ НА ALT + D ---
+    // Чтобы не мешало ходить через WASD, заменим Shift на Alt
+    static bool dAltPressed = false;
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS && glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS) {
+        if (!dAltPressed && !selectedIndices.empty()) {
+            duplicateSelectedObject();
+            dAltPressed = true;
+        }
+    } else dAltPressed = false;
 
     float speed = 5.0f * deltaTime;
     if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) speed *= 3.0f;
@@ -1448,7 +1508,7 @@ private:
                 ImGui::SameLine();
                 if(ImGui::Button("Object")) { ImGui::OpenPopup("ObjectMenu"); } 
                 if (ImGui::BeginPopup("ObjectMenu")) {
-                    if(ImGui::MenuItem("Duplicate Objects", "Shift+D")) { duplicateSelectedObject(); }
+                    if(ImGui::MenuItem("Duplicate Objects", "Ctrl+D")) { duplicateSelectedObject(); }
                     if(ImGui::MenuItem("Delete", "X")) { deleteSelectedObject(); }
                     ImGui::EndPopup();
                 }
@@ -1630,6 +1690,49 @@ private:
         }
 
         currentUiBounds = { showSidebar ? rightX : io.DisplaySize.x, 0.0f, io.DisplaySize.x, io.DisplaySize.y };
+        // 1. Сначала проверяем, нужно ли вообще обрабатывать это окно
+        if (showChangelog) 
+        {
+            ImGui::SetNextWindowSize(ImVec2(350, 200), ImGuiCond_FirstUseEver);
+        
+            // 2. Вызываем Begin. Он возвращает true, если окно не свернуто
+            if (ImGui::Begin("Update 1.1 - Fixes", &showChangelog)) 
+            {
+                ImGui::TextColored(ImVec4(0, 1, 0, 1), "What's New:");
+                ImGui::Separator();
+
+                ImGui::BulletText("Fixed: Infinite scale crash (abs/max scale)");
+                ImGui::BulletText("Fixed: Shift+D spam during movement");
+                ImGui::BulletText("Added: Ctrl+C / Ctrl+V support");
+                ImGui::BulletText("Added: Toast notifications");
+
+                ImGui::Dummy(ImVec2(0, 10));
+            
+                if (ImGui::Button("Great!")) {
+                    showChangelog = false;
+                }
+            }
+            // 3. End() вызывается ТОЛЬКО если был вызван Begin.
+            // Он должен быть внутри первого if, но вне второго.
+            ImGui::End(); 
+        }
+
+        if (toast.active) {
+            toast.timer -= ImGui::GetIO().DeltaTime; // Отнимаем время кадра
+            if (toast.timer <= 0) toast.active = false;
+
+            // Позиционируем в нижний правый угол
+            ImGuiViewport* viewport = ImGui::GetMainViewport();
+            ImVec2 pos = ImVec2(viewport->Pos.x + viewport->Size.x - 20, viewport->Pos.y + viewport->Size.y - 20);
+            ImGui::SetNextWindowPos(pos, ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+
+            // Делаем окно полупрозрачным и без кнопок
+            ImGui::SetNextWindowBgAlpha(0.7f);
+            if (ImGui::Begin("##Toast", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing)) {
+                ImGui::Text("ℹ %s", toast.message.c_str());
+                ImGui::End();
+            }
+        }
         ImGui::Render();
     }
 
