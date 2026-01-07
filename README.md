@@ -81,8 +81,6 @@
    cmake --build build --config Debug
    ```
 
----
-
 # 🗺 NLSDFE Development Roadmap
 
 ## 🟦 Phase 1: Core Architecture & Cleanup
