@@ -83,6 +83,62 @@
 
 ---
 
+# 🗺 NLSDFE Development Roadmap
+
+## 🟦 Phase 1: Core Architecture & Cleanup
+*Goal: Transform "spaghetti" code into a scalable modular system.*
+- [ ] **Modularization:** Split `main.cpp` into `Renderer.cpp`, `Scene.cpp`, `Editor.cpp`, and `Input.cpp`.
+- [ ] **Scene Graph:** Implement Parent-Child hierarchy for object grouping.
+- [ ] **Naming System:** Support for custom object names in the hierarchy panel.
+- [ ] **Resource Manager:** Centralized handling for shaders, textures, and `.nos` files.
+
+## 🟧 Phase 2: Advanced Rendering
+*Goal: Maximize Vulkan and SDF mathematical potential.*
+- [ ] **Multi-Light Support:** Implementation of up to 8 dynamic Point Lights.
+- [ ] **Global Illumination (Lite):** Primitive screen-space or math-based bounce lighting.
+- [ ] **Bloom Effect:** Post-processing pass for glowing materials and light sources.
+- [ ] **Bounding Volumes:** Optimization to skip SDF calculations for distant objects.
+- [ ] **Skybox Engine:** Procedural sky system or HDRI environment mapping.
+
+## 🟩 Phase 3: Editor Workflow
+*Goal: Fast and intuitive level design tools.*
+- [ ] **Grid & Snapping:** Floor grid visualization and object snapping (0.5m / 1.0m steps).
+- [ ] **Asset Browser:** Visual gallery of saved `.nos` models with drag-and-drop.
+- [ ] **Material Library:** Presets for Gold, Glass, Plastic, and Custom shaders.
+- [ ] **Multi-Selection:** Simultaneous transformation (move/rotate/scale) of multiple objects.
+- [ ] **Advanced Undo/Redo:** Persistent action history with 100+ steps.
+
+## 🟥 Phase 4: Gameplay & Physics
+*Goal: Bringing the static world to life.*
+- [ ] **SDF Collisions:** Prevent camera and player-controlled objects from passing through walls.
+- [ ] **Trigger System:** Invisible volumes that fire events (e.g., door opening).
+- [ ] **Scripting Components:** Attach logic to objects (e.g., auto-rotation, path following).
+- [ ] **Play Mode (F5):** Instant switch to game mode with UI hidden and physics enabled.
+
+## 🟪 Phase 5: Distribution & Polish
+*Goal: Final product stabilization.*
+- [ ] **Standalone Export:** Compile a scene into a single executable without the editor.
+- [ ] **Settings Menu:** In-engine graphics settings (Resolution, Shadow Quality, TDR limits).
+- [ ] **API Documentation:** Complete guide for hotkeys and developer instructions.
+
+---
+
+### 👥 Team Roles
+
+**Graphics & Math Lead (You):**
+- Focus on Phase 2 (Lights, Optimization, Shaders).
+- Collision mathematics from Phase 4.
+- Vulkan pipeline maintenance.
+
+**Tooling & UX Lead (Friend):**
+- Focus on Phase 1 (File splitting, Hierarchy logic).
+- Phase 3 implementation (Grid, Asset browser, Material UI).
+- General ImGui management.
+
+---
+*Development Roadmap for NLSDFE Engine - January 2026*
+---
+
 ## 🐞 Список недавних исправлений (v1.1)
 
 *   **Zero-Scale Guard:** Исправлен критический вылет при уменьшении масштаба объекта до нуля.
