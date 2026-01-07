@@ -81,47 +81,47 @@
    cmake --build build --config Debug
    ```
 
-# 🗺 NLSDFE Development Roadmap
+# 🗺 План разработки NLSDFE (Roadmap)
 
-## 🟦 Phase 1: Core Architecture & Cleanup
-*Goal: Transform "spaghetti" code into a scalable modular system.*
-- [ ] **Modularization:** Split `main.cpp` into `Renderer.cpp`, `Scene.cpp`, `Editor.cpp`, and `Input.cpp`.
-- [ ] **Scene Graph:** Implement Parent-Child hierarchy for object grouping.
-- [ ] **Naming System:** Support for custom object names in the hierarchy panel.
-- [ ] **Resource Manager:** Centralized handling for shaders, textures, and `.nos` files.
+## 🟦 Фаза 1: Архитектура и Чистка кода
+*Цель: превратить «макаронный» код в расширяемую систему.*
+- [ ] **Модульность:** Разбить `main.cpp` на отдельные файлы: `Renderer.cpp`, `Scene.cpp`, `Editor.cpp` и `Input.cpp`.
+- [ ] **Граф сцены (Scene Graph):** Реализовать систему «Родитель-Ребенок» для группировки объектов.
+- [ ] **Система именования:** Возможность давать объектам понятные имена (например, «Голова игрока») в иерархии.
+- [ ] **Менеджер ресурсов:** Централизованная загрузка шейдеров и файлов сцены `.nos`.
 
-## 🟧 Phase 2: Advanced Rendering
-*Goal: Maximize Vulkan and SDF mathematical potential.*
-- [ ] **Multi-Light Support:** Implementation of up to 8 dynamic Point Lights.
-- [ ] **Global Illumination (Lite):** Primitive screen-space or math-based bounce lighting.
-- [ ] **Bloom Effect:** Post-processing pass for glowing materials and light sources.
-- [ ] **Bounding Volumes:** Optimization to skip SDF calculations for distant objects.
-- [ ] **Skybox Engine:** Procedural sky system or HDRI environment mapping.
+## 🟧 Фаза 2: Продвинутый Рендеринг
+*Цель: выжать максимум визуала из Vulkan и математики SDF.*
+- [ ] **Многопоточное освещение:** Поддержка до 8 динамических источников света (Point Lights).
+- [ ] **Глобальное освещение (Lite):** Примитивный расчет отраженного света для большего реализма.
+- [ ] **Эффект Bloom:** Мягкое свечение ярких материалов и ламп.
+- [ ] **Оптимизация (Bounding Volumes):** Пропуск расчетов SDF для объектов, которые находятся далеко от луча.
+- [ ] **Система неба:** Добавление процедурного неба или карт окружения (HDRI).
 
-## 🟩 Phase 3: Editor Workflow
-*Goal: Fast and intuitive level design tools.*
-- [ ] **Grid & Snapping:** Floor grid visualization and object snapping (0.5m / 1.0m steps).
-- [ ] **Asset Browser:** Visual gallery of saved `.nos` models with drag-and-drop.
-- [ ] **Material Library:** Presets for Gold, Glass, Plastic, and Custom shaders.
-- [ ] **Multi-Selection:** Simultaneous transformation (move/rotate/scale) of multiple objects.
-- [ ] **Advanced Undo/Redo:** Persistent action history with 100+ steps.
+## 🟩 Фаза 3: Инструментарий Редактора
+*Цель: сделать процесс создания уровней быстрым и удобным.*
+- [ ] **Сетка и привязка:** Визуальная сетка на полу и «прилипание» объектов к шагу (0.5м / 1.0м).
+- [ ] **Браузер ассетов:** Визуальная галерея сохраненных `.nos` моделей с поддержкой Drag-and-Drop.
+- [ ] **Библиотека материалов:** Готовые пресеты (Золото, Стекло, Пластик) в один клик.
+- [ ] **Множественное выделение:** Одновременная трансформация (движение/поворот) нескольких объектов.
+- [ ] **Продвинутый Undo/Redo:** История действий на 100+ шагов с сохранением на диск.
 
-## 🟥 Phase 4: Gameplay & Physics
-*Goal: Bringing the static world to life.*
-- [ ] **SDF Collisions:** Prevent camera and player-controlled objects from passing through walls.
-- [ ] **Trigger System:** Invisible volumes that fire events (e.g., door opening).
-- [ ] **Scripting Components:** Attach logic to objects (e.g., auto-rotation, path following).
-- [ ] **Play Mode (F5):** Instant switch to game mode with UI hidden and physics enabled.
+## 🟥 Фаза 4: Геймплей и Физика
+*Цель: вдохнуть жизнь в статичный мир.*
+- [ ] **SDF-коллизии:** Запретить камере и игроку проходить сквозь стены и объекты.
+- [ ] **Система триггеров:** Невидимые зоны, которые запускают события (например, открывают дверь).
+- [ ] **Компоненты логики:** Возможность «вешать» на объекты простые скрипты (вращение, движение по пути).
+- [ ] **Режим игры (Play Mode):** Мгновенное переключение (F5) — скрытие интерфейса и включение физики.
 
-## 🟪 Phase 5: Distribution & Polish
-*Goal: Final product stabilization.*
-- [ ] **Standalone Export:** Compile a scene into a single executable without the editor.
-- [ ] **Settings Menu:** In-engine graphics settings (Resolution, Shadow Quality, TDR limits).
-- [ ] **API Documentation:** Complete guide for hotkeys and developer instructions.
+## 🟪 Фаза 5: Релиз и Полировка
+*Цель: превратить проект в готовый продукт.*
+- [ ] **Экспорт проекта:** Сборка сцены в один автономный `.exe` файл без редактора.
+- [ ] **Меню настроек:** Настройки графики внутри движка (разрешение, качество теней, лимиты TDR).
+- [ ] **Документация:** Полный гайд по горячим клавишам и API для разработчиков.
 
 ---
-*Development Roadmap for NLSDFE Engine - January 2026*
----
+*План развития движка NLSDFE — Январь 2026*
+
 
 ## 🐞 Список недавних исправлений (v1.1)
 
