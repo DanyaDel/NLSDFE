@@ -1,3 +1,0 @@
-C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-subbuild/CMakeFiles/glfw-populate.dir
-C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-subbuild/CMakeFiles/ALL_BUILD.dir
-C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-subbuild/CMakeFiles/ZERO_CHECK.dir

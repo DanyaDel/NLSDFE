@@ -1,7 +1,7 @@
 #version 450
 layout(local_size_x = 16, local_size_y = 16) in;
 
-layout(binding = 0, rgba8) uniform writeonly image2D resultImage;
+layout(binding = 0) uniform writeonly image2D resultImage;
 
 layout(push_constant) uniform PushConsts {
     mat4 camToWorld;
@@ -84,7 +84,7 @@ vec2 mapScene(vec3 p) {
     vec2 globalRes = vec2(100.0, -1.0);
     for(int i = 0; i < pc.objectCount; i++) {
         vec3 pos = scene.objects[i].position.xyz;
-        vec3 scl = scene.objects[i].scale.xyz;
+        vec3 scl = max(scene.objects[i].scale.xyz, vec3(0.001));
         float size = scene.objects[i].params.x;
         int op = int(scene.objects[i].params.y);
         vec3 localP = p - pos;
@@ -297,7 +297,7 @@ void main() {
         
         // Raymarch
         int stepsTaken = 0;
-        for(int i=0; i<128; i++) {
+        for(int i=0; i<32; i++) {
             stepsTaken++;
             vec3 p = ro + rd * t;
             vec2 res = mapScene(p);

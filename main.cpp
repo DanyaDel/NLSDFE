@@ -1231,7 +1231,26 @@ private:
     void createInstance() { VkApplicationInfo a{VK_STRUCTURE_TYPE_APPLICATION_INFO,nullptr,"SDF",1,"",1,VK_API_VERSION_1_3}; uint32_t c; const char** e=glfwGetRequiredInstanceExtensions(&c); VkInstanceCreateInfo i{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,nullptr,0,&a,0,nullptr,c,e}; vkCreateInstance(&i,nullptr,&instance); }
     void createSurface() { glfwCreateWindowSurface(instance,window,nullptr,&surface); }
     void pickPhysicalDevice() { uint32_t c; vkEnumeratePhysicalDevices(instance,&c,nullptr); std::vector<VkPhysicalDevice> d(c); vkEnumeratePhysicalDevices(instance,&c,d.data()); physicalDevice=d[0]; }
-    void createLogicalDevice() { float p=1.0f; VkDeviceQueueCreateInfo q{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,nullptr,0,0,1,&p}; const char* e[]={VK_KHR_SWAPCHAIN_EXTENSION_NAME}; VkDeviceCreateInfo i{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,nullptr,0,1,&q,0,nullptr,1,e}; vkCreateDevice(physicalDevice,&i,nullptr,&device); vkGetDeviceQueue(device,0,0,&computeQueue); vkGetDeviceQueue(device,0,0,&presentQueue); }
+    void createLogicalDevice() 
+    { 
+        float p = 1.0f;
+        VkDeviceQueueCreateInfo q{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, nullptr, 0, 0, 1, &p};
+        const char* e[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
+    // --- ДОБАВЛЯЕМ ЭТИ СТРОКИ ---
+        VkPhysicalDeviceFeatures deviceFeatures{};
+    // Без этой галочки Nvidia выдаст ошибку, если в шейдере нет rgba8
+        deviceFeatures.shaderStorageImageWriteWithoutFormat = VK_TRUE; 
+    // ----------------------------
+
+        VkDeviceCreateInfo i{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, nullptr, 0, 1, &q, 0, nullptr, 1, e, &deviceFeatures};
+    
+        if (vkCreateDevice(physicalDevice, &i, nullptr, &device) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create logical device!");
+    }
+    
+    vkGetDeviceQueue(device, 0, 0, &computeQueue);
+    vkGetDeviceQueue(device, 0, 0, &presentQueue); }
     void createSwapchain() { VkSurfaceCapabilitiesKHR c; vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice,surface,&c); if(c.currentExtent.width!=UINT32_MAX) swapchainExtent=c.currentExtent; else { int w,h; glfwGetFramebufferSize(window,&w,&h); swapchainExtent={static_cast<uint32_t>(w),static_cast<uint32_t>(h)}; } VkSwapchainCreateInfoKHR i{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR}; i.surface=surface; i.minImageCount=c.minImageCount+1; if(c.maxImageCount>0&&i.minImageCount>c.maxImageCount) i.minImageCount=c.maxImageCount; i.imageFormat=VK_FORMAT_B8G8R8A8_UNORM; i.imageColorSpace=VK_COLOR_SPACE_SRGB_NONLINEAR_KHR; i.imageExtent=swapchainExtent; i.imageArrayLayers=1; i.imageUsage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_STORAGE_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT; i.preTransform=c.currentTransform; i.compositeAlpha=VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR; i.presentMode=VK_PRESENT_MODE_FIFO_KHR; i.clipped=VK_TRUE; vkCreateSwapchainKHR(device,&i,nullptr,&swapchain); uint32_t n; vkGetSwapchainImagesKHR(device,swapchain,&n,nullptr); swapchainImages.resize(n); vkGetSwapchainImagesKHR(device,swapchain,&n,swapchainImages.data()); }
     void createImageViews() { swapchainImageViews.resize(swapchainImages.size()); for(size_t i=0;i<swapchainImages.size();i++) { VkImageViewCreateInfo v{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,nullptr,0,swapchainImages[i],VK_IMAGE_VIEW_TYPE_2D,VK_FORMAT_B8G8R8A8_UNORM,{},{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1}}; vkCreateImageView(device,&v,nullptr,&swapchainImageViews[i]); } }
     void createDescriptors() { VkDescriptorSetLayoutBinding b[]={{0,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,1,VK_SHADER_STAGE_COMPUTE_BIT},{1,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_COMPUTE_BIT}}; VkDescriptorSetLayoutCreateInfo l{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,nullptr,0,2,b}; vkCreateDescriptorSetLayout(device,&l,nullptr,&descriptorSetLayout); VkDescriptorPoolSize s[]={{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,(uint32_t)swapchainImages.size()},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,(uint32_t)swapchainImages.size()}}; VkDescriptorPoolCreateInfo p{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,nullptr,0,(uint32_t)swapchainImages.size(),2,s}; vkCreateDescriptorPool(device,&p,nullptr,&descriptorPool); std::vector<VkDescriptorSetLayout> dl(swapchainImages.size(),descriptorSetLayout); VkDescriptorSetAllocateInfo a{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,nullptr,descriptorPool,(uint32_t)swapchainImages.size(),dl.data()}; descriptorSets.resize(swapchainImages.size()); vkAllocateDescriptorSets(device,&a,descriptorSets.data()); for(size_t i=0;i<swapchainImages.size();i++) { VkDescriptorImageInfo im{nullptr,swapchainImageViews[i],VK_IMAGE_LAYOUT_GENERAL}; VkDescriptorBufferInfo bu{sceneBuffer,0,sizeof(ObjectData)*MAX_OBJECTS}; VkWriteDescriptorSet w[]={{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,nullptr,descriptorSets[i],0,0,1,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,&im,nullptr,nullptr},{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,nullptr,descriptorSets[i],1,0,1,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,nullptr,&bu,nullptr}}; vkUpdateDescriptorSets(device,2,w,0,nullptr); } }
@@ -1242,6 +1261,7 @@ private:
     
     void recordCommandBuffer(VkCommandBuffer cb, uint32_t i) {
         vkResetCommandBuffer(cb, 0);
+        std::cout << "Recording commands for image " << i << "..." << std::endl;
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; vkBeginCommandBuffer(cb, &bi);
         
         // 1. Compute Barrier
@@ -1614,7 +1634,8 @@ private:
             renderUI();
             if (fs::exists(SHADER_SOURCE)) { try { auto t = fs::last_write_time(SHADER_SOURCE); if (t > lastShaderWriteTime) { vkDeviceWaitIdle(device); reloadShader(); lastShaderWriteTime = t; } } catch(...) {} }
             vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
-            updateSSBO(); 
+            updateSSBO();
+            vkQueueWaitIdle(computeQueue); 
             uint32_t imageIndex; VkResult res = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, imageAvailable[currentFrame], VK_NULL_HANDLE, &imageIndex);
             if (res == VK_ERROR_OUT_OF_DATE_KHR) { recreateSwapchain(); continue; } else if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR) throw std::runtime_error("failed acquire");
             vkResetFences(device, 1, &inFlightFences[currentFrame]); 
@@ -1626,6 +1647,7 @@ private:
             si.commandBufferCount=1; si.pCommandBuffers=&commandBuffers[imageIndex]; 
             VkSemaphore ss[]={renderFinished[currentFrame]}; 
             si.signalSemaphoreCount=1; si.pSignalSemaphores=ss;
+            std::cout << "Submitting to queue..." << std::endl;
             if (vkQueueSubmit(computeQueue, 1, &si, inFlightFences[currentFrame]) != VK_SUCCESS) throw std::runtime_error("failed submit");
             VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR}; 
             pi.waitSemaphoreCount=1; pi.pWaitSemaphores=ss; 
