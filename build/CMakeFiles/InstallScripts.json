@@ -1,0 +1,9 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Users/Daniil/Documents/SDF_Engine/build/cmake_install.cmake",
+		"C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-build/cmake_install.cmake",
+		"C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-build/src/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

@@ -1,0 +1,14 @@
+# Target labels
+ glfw-populate
+# Source files and their labels
+C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-subbuild/CMakeFiles/glfw-populate
+C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-subbuild/CMakeFiles/acff7749a5206b4a54c6a1f50595c959/glfw-populate.rule
+C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-subbuild/CMakeFiles/73e419d08de569e9ab060dfafc7d3e26/glfw-populate-complete.rule
+C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-subbuild/CMakeFiles/3e28e0f6f79ef58fead5172d8a1d4a9c/glfw-populate-build.rule
+C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-subbuild/CMakeFiles/3e28e0f6f79ef58fead5172d8a1d4a9c/glfw-populate-configure.rule
+C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-subbuild/CMakeFiles/3e28e0f6f79ef58fead5172d8a1d4a9c/glfw-populate-download.rule
+C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-subbuild/CMakeFiles/3e28e0f6f79ef58fead5172d8a1d4a9c/glfw-populate-install.rule
+C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-subbuild/CMakeFiles/3e28e0f6f79ef58fead5172d8a1d4a9c/glfw-populate-mkdir.rule
+C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-subbuild/CMakeFiles/3e28e0f6f79ef58fead5172d8a1d4a9c/glfw-populate-patch.rule
+C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-subbuild/CMakeFiles/3e28e0f6f79ef58fead5172d8a1d4a9c/glfw-populate-test.rule
+C:/Users/Daniil/Documents/SDF_Engine/build/_deps/glfw-subbuild/CMakeFiles/3e28e0f6f79ef58fead5172d8a1d4a9c/glfw-populate-update.rule

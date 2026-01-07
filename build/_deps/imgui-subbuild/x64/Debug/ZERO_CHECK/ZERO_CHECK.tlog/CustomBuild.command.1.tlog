@@ -1,0 +1,10 @@
+^C:\USERS\DANIIL\DOCUMENTS\SDF_ENGINE\BUILD\_DEPS\IMGUI-SUBBUILD\CMAKEFILES\5EDBE30B24DF21393E5146C181F39374\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/Daniil/Documents/SDF_Engine/build/_deps/imgui-subbuild -BC:/Users/Daniil/Documents/SDF_Engine/build/_deps/imgui-subbuild --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/Daniil/Documents/SDF_Engine/build/_deps/imgui-subbuild/imgui-populate.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

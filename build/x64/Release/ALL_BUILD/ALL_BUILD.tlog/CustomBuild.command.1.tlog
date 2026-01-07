@@ -1,0 +1,10 @@
+^C:\USERS\DANIIL\DOCUMENTS\SDF_ENGINE\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/Daniil/Documents/SDF_Engine -BC:/Users/Daniil/Documents/SDF_Engine/build --check-stamp-file C:/Users/Daniil/Documents/SDF_Engine/build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
