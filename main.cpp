@@ -1473,19 +1473,33 @@ private:
             {
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 10));
                 ImGui::Button("Sel", ImVec2(30, 30)); ImGui::Separator();
-                if(currentMode == MODE_MOVE) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
+                
+                // Исправленный Mov
+                bool isMov = (currentMode == MODE_MOVE);
+                if(isMov) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
                 if(ImGui::Button("Mov", ImVec2(30, 30))) currentMode = MODE_MOVE;
-                if(currentMode == MODE_MOVE) ImGui::PopStyleColor();
-                if(currentMode == MODE_ROTATE) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
+                if(isMov) ImGui::PopStyleColor();
+
+                // Исправленный Rot
+                bool isRot = (currentMode == MODE_ROTATE);
+                if(isRot) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
                 if(ImGui::Button("Rot", ImVec2(30, 30))) currentMode = MODE_ROTATE;
-                if(currentMode == MODE_ROTATE) ImGui::PopStyleColor();
-                if(currentMode == MODE_SCALE) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
+                if(isRot) ImGui::PopStyleColor();
+
+                // Исправленный Scl
+                bool isScl = (currentMode == MODE_SCALE);
+                if(isScl) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
                 if(ImGui::Button("Scl", ImVec2(30, 30))) currentMode = MODE_SCALE;
-                if(currentMode == MODE_SCALE) ImGui::PopStyleColor();
+                if(isScl) ImGui::PopStyleColor();
+
                 ImGui::Separator();
-                if (showGizmos) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
+
+                // Исправленный Gizmo
+                bool isGiz = showGizmos;
+                if (isGiz) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyle().Colors[ImGuiCol_ButtonActive]);
                 if (ImGui::Button("Giz", ImVec2(30, 30))) showGizmos = !showGizmos;
-                if (showGizmos) ImGui::PopStyleColor();
+                if (isGiz) ImGui::PopStyleColor();
+
                 ImGui::PopStyleVar();
             }
             ImGui::End();
