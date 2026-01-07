@@ -15,3 +15,5 @@ obj/
 *.pdb
 *.ilk
 /build
+build.7z
+Новая сжатая ZIP-папка.zip
