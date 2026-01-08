@@ -308,15 +308,22 @@ void renderUI(GLFWwindow* window) {
         SetWindowLayout(rightX, topOffset, rightPanelWidth, hierarchyHeight);
         ImGui::Begin("Scene Collection", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
         {
-            ImGui::TextDisabled("HIERARCHY"); ImGui::Separator();
-            ImGui::BeginChild("ScrollH", ImVec2(0,0), false);
-            for (int i = 0; i < sceneObjects.size(); i++) {
-                std::string label = ((int)sceneObjects[i].position.w == 0 ? "Sphere " : "Box ") + std::to_string(i);
-                bool isSelected = false;
-                for(int s : selectedIndices) if(s == i) isSelected = true;
-                if (isSelected) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.28f, 0.56f, 0.90f, 1.00f));
-                if (ImGui::Selectable(label.c_str(), isSelected)) { if(!ImGui::GetIO().KeyShift) selectedIndices.clear(); selectedIndices.push_back(i); }
-                if (isSelected) ImGui::PopStyleColor();
+            ImGui::TextDisabled("HIERARCHY"); 
+            ImGui::Separator();
+            if (ImGui::BeginPopupContextWindow()) {
+                if (ImGui::MenuItem("Create Empty Group")) { /* Создать пустой SceneNode */ }
+                ImGui::EndPopup();
+            }
+
+            ImGui::BeginChild("HierarchyScroll", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+
+            {
+                for (int i = 0; i < (int)sceneGraph.size(); i++) {
+                    // Рисуем только те объекты, у которых нет родителя (корневые)
+                    if (sceneGraph[i].parent == -1) {
+                        DrawSceneNode(i);
+                    }
+                }
             }
             ImGui::EndChild();
         }
