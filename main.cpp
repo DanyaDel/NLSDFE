@@ -298,6 +298,8 @@ private:
         ImGui::CreateContext();
         setupImGuiStyle();
 
+
+
         ImGui_ImplGlfw_InitForVulkan(window, true);
         ImGui_ImplVulkan_InitInfo init_info = {};
         init_info.Instance = instance;

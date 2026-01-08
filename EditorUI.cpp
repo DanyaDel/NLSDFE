@@ -11,12 +11,76 @@
 #include <algorithm>
 #include <string>
 
+struct ChangelogEntry {
+    std::string version;
+    std::string date;
+    std::vector<std::string> changes;
+};
+
+const std::vector<ChangelogEntry> appChangelog = {
+    {
+        "v1.2 - Modular Update", "08.01.2026",
+        {
+            "Refactored engine into modules (Input, Scene, Globals, UI).",
+            "Fixed LNK2005 duplicate symbol errors.",
+            "Moved Gizmo logic to Input.cpp.",
+            "Implemented Changelog system."
+        }
+    },
+    {
+        "v1.1 - Hotfix", "05.01.2026",
+        {
+            "Fixed zero-scale crash.",
+            "Optimized NOS file size for thumbnails.",
+            "Added Shift-acceleration for camera movement."
+        }
+    },
+    {
+        "v1.0 - Initial Release", "01.01.2026",
+        {
+            "Basic Vulkan Raymarching core.",
+            "NOS file format support.",
+            "Primitive types: Sphere and Box."
+        }
+    }
+};
+
 // FIXED: Helper function for centering text
 void TextCentered(std::string text) {
     float winWidth = ImGui::GetWindowSize().x;
     float textWidth = ImGui::CalcTextSize(text.c_str()).x;
     ImGui::SetCursorPosX((winWidth - textWidth) * 0.5f);
     ImGui::Text("%s", text.c_str());
+}
+
+void renderChangelogWindow() {
+    if (!showChangelog) return;
+
+    // Устанавливаем размер окна при первом открытии
+    ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_FirstUseEver);
+    
+    if (ImGui::Begin("What's New?", &showChangelog, ImGuiWindowFlags_NoCollapse)) {
+        for (const auto& entry : appChangelog) {
+            // Заголовок версии (например, v1.2)
+            ImGui::TextColored(ImVec4(0.28f, 0.56f, 0.90f, 1.0f), "%s", entry.version.c_str());
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%s)", entry.date.c_str());
+            
+            // Список изменений внутри версии
+            for (const auto& point : entry.changes) {
+                ImGui::BulletText("%s", point.c_str());
+            }
+            
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+        }
+
+        if (ImGui::Button("Close")) {
+            showChangelog = false;
+        }
+    }
+    ImGui::End();
 }
 
 void renderUI(GLFWwindow* window) {
@@ -66,11 +130,18 @@ void renderUI(GLFWwindow* window) {
                 }
                 ImGui::EndMenu();
             }
-
+            if (ImGui::BeginMenu("Help")) {
+                if (ImGui::MenuItem("Changelog")) {
+                    showChangelog = true;
+                }
+                ImGui::EndMenu();
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Exit", "Alt+F4")) { glfwSetWindowShouldClose(window, true); }
+            ImGui::TextDisabled("SDF Engine v1.2");
             ImGui::EndMenu();
         }
+
         if (ImGui::BeginMenu("Edit")) {
             if (ImGui::MenuItem("Properties")) { showSettingsWindow = true; }
             if (ImGui::MenuItem("Undo", "Ctrl+Z")) { performUndo(); }
@@ -310,8 +381,13 @@ void renderUI(GLFWwindow* window) {
         }
     }
 
+    // Показываем окно изменений (если нужно)
+    renderChangelogWindow();
+
     ImGui::Render();
 }
+
+
 
 void setupImGuiStyle() {
     ImGuiStyle& style = ImGui::GetStyle();

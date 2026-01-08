@@ -99,6 +99,7 @@ extern double currentMouseX;
 extern double currentMouseY;
 extern bool isDraggingGizmo;
 extern bool showGizmos;
+extern bool showChangelog;
 
 // FIXED: inline constexpr позволяет инициализировать константу прямо в хедере
 inline constexpr float DRAG_THRESHOLD = 3.0f;

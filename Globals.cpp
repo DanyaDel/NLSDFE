@@ -8,7 +8,6 @@ int selectedSettingsTab = 0;
 bool showToolbar = true;
 bool showSidebar = true;
 bool showToolSettings = true;
-bool showChangelog = false;
 int currentShadingMode = 1;
 std::string defaultExportPath = "";
 
@@ -33,6 +32,7 @@ double currentMouseX = 0.0;
 double currentMouseY = 0.0;
 bool isDraggingGizmo = false;
 bool showGizmos = true;
+bool showChangelog = true;
 
 // --- Helper Implementation ---
 
