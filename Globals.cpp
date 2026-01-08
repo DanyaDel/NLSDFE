@@ -34,10 +34,9 @@ bool isDraggingGizmo = false;
 bool showGizmos = true;
 bool showChangelog = true;
 
-// --- Helper Implementation ---
+// Инициализация переменной логотипа
+void* g_AppLogoID = nullptr;
 
-// Эта функция была объявлена в Common.h, но потерялась реализация.
-// Теперь линковщик найдет её здесь.
 void showToast(std::string text) {
     toast.message = text;
     toast.timer = 3.0f;

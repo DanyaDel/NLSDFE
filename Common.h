@@ -57,6 +57,7 @@ struct PushConstants {
     int mode; 
     float uiMinX, uiMinY, uiMaxX, uiMaxY; 
     int shadingMode; 
+    float gizmoPos[3]; 
 };
 
 struct Notification {
@@ -99,9 +100,7 @@ extern double currentMouseX;
 extern double currentMouseY;
 extern bool isDraggingGizmo;
 extern bool showGizmos;
-extern bool showChangelog;
 
-// FIXED: inline constexpr позволяет инициализировать константу прямо в хедере
 inline constexpr float DRAG_THRESHOLD = 3.0f;
 
 extern GameEditorMode currentEditorMode;
@@ -115,6 +114,9 @@ extern std::vector<ObjectData> clipboard;
 extern Notification toast;
 extern std::string currentLoadedFile;
 extern NosHeader lastLoadedHeader;
+
+// --- Global Variable for Logo Texture ID ---
+extern void* g_AppLogoID; 
 
 // --- Helper Declarations ---
 void showToast(std::string text);

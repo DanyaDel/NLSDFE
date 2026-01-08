@@ -7,7 +7,6 @@
 #include <cmath>
 #include <iostream>
 
-// Implementation of helper functions usually located in main.cpp or Common.cpp
 CameraBasis getCameraBasis() {
     cam.phi = std::clamp(cam.phi, 0.01f, 3.14159f - 0.01f);
     vec3 offset = { 
@@ -337,34 +336,56 @@ void processInput(GLFWwindow* window, float deltaTime) {
         cam.target = getSelectionCenter();
     }
 
-    static bool zPressed = false;
-    if (glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS && (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS)) {
-        if (!zPressed) { performUndo(); zPressed = true; }
-    } else zPressed = false;
+    bool isCtrl = (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS);
+    
+    // --- UNDO (Ctrl + Z) with Repeat ---
+    static float undoTimer = 0.0f;
+    if (glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS && isCtrl) {
+        if (undoTimer <= 0.0f) {
+            performUndo();
+            undoTimer = 0.15f; // Delay between repeats
+        } else {
+            undoTimer -= deltaTime;
+        }
+    } else {
+        undoTimer = 0.0f; // Reset timer on release
+    }
 
-    static bool delPressed = false;
+    // --- DELETE with Repeat ---
+    static float delTimer = 0.0f;
     if (glfwGetKey(window, GLFW_KEY_DELETE) == GLFW_PRESS) {
-        if (!delPressed) { deleteSelectedObject(); delPressed = true; }
-    } else delPressed = false;
+        if (delTimer <= 0.0f) {
+            deleteSelectedObject();
+            delTimer = 0.2f; 
+        } else {
+            delTimer -= deltaTime;
+        }
+    } else {
+        delTimer = 0.0f;
+    }
     
     // --- COPY (Ctrl + C) ---
-    static bool cPressed = false;
-    if (glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS && glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) {
-        if (!cPressed && !selectedIndices.empty()) {
+    static float copyTimer = 0.0f;
+    if (glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS && isCtrl) {
+        if (copyTimer <= 0.0f && !selectedIndices.empty()) {
             clipboard.clear();
             for (int idx : selectedIndices) {
                 if (idx < sceneObjects.size()) clipboard.push_back(sceneObjects[idx]);
             }
             std::string name = (clipboard.size() == 1) ? "Object" : std::to_string(clipboard.size()) + " Objects";
             showToast("Copied " + name);
-            cPressed = true;
+            copyTimer = 0.3f; // Slower repeat for copy
+        } else if (copyTimer > 0.0f) {
+            copyTimer -= deltaTime;
         }
-    } else cPressed = false;
+    } else {
+        copyTimer = 0.0f;
+    }
     
-    // --- PASTE (Ctrl + V) ---
-    static bool vPressed = false;
-    if (glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS && glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) {
-        if (!vPressed && !clipboard.empty()) {
+    // --- PASTE (Ctrl + V) with Repeat ---
+    static float pasteTimer = 0.0f;
+    if (glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS && isCtrl) {
+        if (pasteTimer <= 0.0f && !clipboard.empty()) {
             saveUndo(); 
             selectedIndices.clear();
             for (const auto& obj : clipboard) {
@@ -376,18 +397,26 @@ void processInput(GLFWwindow* window, float deltaTime) {
                 selectedIndices.push_back((int)sceneObjects.size() - 1);
             }
             showToast("Pasted " + std::to_string(clipboard.size()) + " Objects");
-            vPressed = true;
+            pasteTimer = 0.2f;
+        } else {
+            pasteTimer -= deltaTime;
         }
-    } else vPressed = false;
+    } else {
+        pasteTimer = 0.0f;
+    }
     
     // --- DUPLICATE (Alt + D) ---
-    static bool dAltPressed = false;
+    static float dupTimer = 0.0f;
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS && glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS) {
-        if (!dAltPressed && !selectedIndices.empty()) {
+        if (dupTimer <= 0.0f && !selectedIndices.empty()) {
             duplicateSelectedObject();
-            dAltPressed = true;
+            dupTimer = 0.25f;
+        } else {
+            dupTimer -= deltaTime;
         }
-    } else dAltPressed = false;
+    } else {
+        dupTimer = 0.0f;
+    }
 
     float speed = 5.0f * deltaTime;
     if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) speed *= 3.0f;

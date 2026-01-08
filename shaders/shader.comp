@@ -10,9 +10,10 @@ layout(push_constant) uniform PushConsts {
     int draggingAxis;
     int objectCount;
     int selectedIndex;
-    int mode; // Gizmo mode
+    int mode; // 0=Move, 1=Rotate, 2=Scale
     float uiMinX, uiMinY, uiMaxX, uiMaxY;
-    int shadingMode; // 0=Wire/Heat, 1=Solid, 2=Material, 3=Rendered
+    int shadingMode; // 0=Wire, 1=Solid, 2=Material, 3=Rendered
+    vec3 gizmoPos;   // Центр выделения (передается из CPU)
 } pc;
 
 struct Object {
@@ -31,7 +32,6 @@ layout(std430, binding = 1) readonly buffer ObjectBuffer {
 // =================================================================
 // --- Utilities ---
 // =================================================================
-// Gold Noise for jittering
 float rand(vec2 xy) {
     return fract(tan(distance(xy * 1.61803398874989484820459, xy) * pc.time) * xy.x);
 }
@@ -83,32 +83,26 @@ vec2 opSmoothIntersect(vec2 d1, vec2 d2, float k) {
 vec2 mapScene(vec3 p) {
     vec2 globalRes = vec2(100.0, -1.0);
     for(int i = 0; i < pc.objectCount; i++) {
-        // 1. Сначала достаем базовые данные
         vec3 pos = scene.objects[i].position.xyz;
-        vec3 rawScl = scene.objects[i].scale.xyz; // Сохраняем оригинал (с минусами)
-        vec3 absScl = abs(rawScl);               // Делаем копию без минусов
+        vec3 rawScl = scene.objects[i].scale.xyz;
+        vec3 absScl = abs(rawScl);
         float size = scene.objects[i].params.x;
         int type = int(scene.objects[i].position.w);
         int op = int(scene.objects[i].params.y);
         float smoothK = max(scene.objects[i].params.z, 0.001);
 
-        // 2. Считаем локальную позицию луча (с учетом поворота)
         vec3 localP = p - pos;
         localP = (scene.objects[i].invRotation * vec4(localP, 1.0)).xyz;
 
-        // 3. Считаем дистанцию (SDF)
         float d = 0.0;
-        if (type == 0) { // Сфера
-            // Используем absScl для масштабирования результата, 
-            // но rawScl внутри формулы для инверсии
+        if (type == 0) { // Sphere
             float minScale = min(absScl.x, min(absScl.y, absScl.z));
             d = sdSphere(localP / rawScl, size) * minScale; 
         } 
-        else if (type == 1) { // Коробка
+        else if (type == 1) { // Box
             d = sdBox(localP, vec3(size) * absScl);
         }
 
-        // 4. Объединяем объект с остальной сценой
         vec2 currentObj = vec2(d, float(i));
         if (i == 0) globalRes = currentObj;
         else {
@@ -141,13 +135,10 @@ float calcAO(vec3 p, vec3 n) {
     return clamp(1.0 - 2.5 * occ, 0.0, 1.0);
 }
 
-// Optimized Soft Shadow with Jitter
 float calcSoftShadow(vec3 ro, vec3 rd, float tmin, float tmax, float k) {
     float res = 1.0; 
-    // Jitter starting t to reduce banding
     float t = tmin + (rand(gl_GlobalInvocationID.xy) * 0.02); 
     float ph = 1e10;
-    
     for(int i=0; i<16; i++) {
         float h = mapScene(ro + rd*t).x;
         float y = h*h/(2.0*ph);
@@ -160,7 +151,6 @@ float calcSoftShadow(vec3 ro, vec3 rd, float tmin, float tmax, float k) {
     return clamp(res, 0.0, 1.0);
 }
 
-// Fast Hard Shadow for Solid Mode
 float calcHardShadow(vec3 ro, vec3 rd, float tmax) {
     float t = 0.05;
     for(int i=0; i<32; i++) {
@@ -204,50 +194,52 @@ vec3 calculatePBR(vec3 n, vec3 v, vec3 lightDir, vec3 albedo, float metallic, fl
 }
 
 // =================================================================
-// --- Gizmo & Guide Definitions (FIXED) ---
+// --- Gizmo & Guide Definitions ---
 // =================================================================
 
 float sdArrow(vec3 p, float totalLen, float thick, float headLen, float headW) {
     float bodyLen = totalLen - headLen;
-    // Cylinder for body: p shifted up by bodyLen/2
     float body = sdCylinder(p - vec3(0, bodyLen*0.5, 0), bodyLen*0.5, thick);
-    // Cone for head: p shifted up by bodyLen + headLen/2
     float head = sdCone(p - vec3(0, bodyLen + headLen*0.5, 0), headLen*0.5, headW, 0.0);
     return min(body, head);
 }
 
 float sdScaleHandle(vec3 p, float totalLen, float thick, float cubeSize) {
     float bodyLen = totalLen - cubeSize;
-    // Cylinder for body
     float body = sdCylinder(p - vec3(0, bodyLen*0.5, 0), bodyLen*0.5, thick);
-    // Box for head
     float head = sdBox(p - vec3(0, bodyLen + cubeSize*0.5, 0), vec3(cubeSize*0.5));
     return min(body, head);
 }
 
 vec2 mapGizmo(vec3 p, vec3 ro) {
     if (pc.selectedIndex < 0) return vec2(100.0, 0.0);
-    vec3 center = scene.objects[pc.selectedIndex].position.xyz;
+    
+    // Используем переданный центр выделения, а не позицию отдельного объекта
+    vec3 center = pc.gizmoPos;
+    
     float scale = length(ro - center) * 0.12; 
     vec3 loc = p - center;
     float minD = 10000.0; float axis = 0.0;
-    if (pc.mode == 0) { 
+    
+    if (pc.mode == 0) { // Move
         float len = 1.3*scale; float th = 0.02*scale; float hL = 0.3*scale; float hW = 0.08*scale;
         float dX = sdArrow(vec3(loc.y, loc.x, loc.z), len, th, hL, hW);
         float dY = sdArrow(loc, len, th, hL, hW);
         float dZ = sdArrow(vec3(loc.y, loc.z, loc.x), len, th, hL, hW);
-        float dC = length(loc) - 0.2*scale;
+        // Центральный шар для перемещения во всех осях
+        float dC = length(loc) - 0.25*scale;
+        
         minD = dX; axis = 1.0;
         if (dY < minD) { minD = dY; axis = 2.0; }
         if (dZ < minD) { minD = dZ; axis = 3.0; }
-        if (dC < minD) { minD = dC; axis = 4.0; }
-    } else if (pc.mode == 1) { 
+        if (dC < minD) { minD = dC; axis = 4.0; } // 4.0 = Center Axis
+    } else if (pc.mode == 1) { // Rotate
         float r = 1.0 * scale; float th = 0.02 * scale;
         float dX = sdRingX(loc, r, th); float dY = sdRingZ(loc, r, th); float dZ = sdRingY(loc, r, th); 
         minD = dX; axis = 1.0;
         if (dY < minD) { minD = dY; axis = 2.0; }
         if (dZ < minD) { minD = dZ; axis = 3.0; }
-    } else if (pc.mode == 2) { 
+    } else if (pc.mode == 2) { // Scale
         float len = 1.3*scale; float th = 0.02*scale; float cubeS = 0.15*scale;
         float dX = sdScaleHandle(vec3(loc.y, loc.x, loc.z), len, th, cubeS);
         float dY = sdScaleHandle(loc, len, th, cubeS);
@@ -260,24 +252,26 @@ vec2 mapGizmo(vec3 p, vec3 ro) {
     }
     return vec2(minD, axis);
 }
+
+// SDF для бесконечной линии
 float mapGuideLine(vec3 p, vec3 center, int axis, float scale) {
-    vec3 q = p - center; float thick = 0.015 * scale; 
-    if (axis == 1) return length(q.yz) - thick;
-    if (axis == 2) return length(q.xz) - thick;
-    if (axis == 3) return length(q.xy) - thick;
+    vec3 q = p - center; 
+    // Делаем линию очень тонкой (0.005)
+    float thick = 0.005 * scale; 
+    
+    // Формула расстояния до бесконечной линии вдоль оси
+    if (axis == 1) return length(q.yz) - thick; // Линия вдоль X
+    if (axis == 2) return length(q.xz) - thick; // Линия вдоль Y
+    if (axis == 3) return length(q.xy) - thick; // Линия вдоль Z
     return 1000.0;
 }
 
-// =================================================================
-// --- Main Loop (Optimized Viewport Shading) ---
-// =================================================================
 void main() {
     ivec2 texelCoord = ivec2(gl_GlobalInvocationID.xy);
     
-    // UI Culling
+    // UI Culling (не рисуем под интерфейсом)
     if (float(texelCoord.x) >= pc.uiMinX && float(texelCoord.x) <= pc.uiMaxX &&
-        float(texelCoord.y) >= pc.uiMinY && float(texelCoord.y) <= pc.uiMaxY) 
-    {
+        float(texelCoord.y) >= pc.uiMinY && float(texelCoord.y) <= pc.uiMaxY) {
         imageStore(resultImage, texelCoord, vec4(0.1, 0.1, 0.1, 1.0)); 
         return;
     }
@@ -290,23 +284,22 @@ void main() {
     vec3 ro = pc.camToWorld[3].xyz;
     vec3 rd = mat3(pc.camToWorld) * normalize(vec3(uv, -1.8));
 
-    // Auto-Optimization: Force Solid mode (1) if dragging
+    // Авто-оптимизация: Если двигаем гизмо, принудительно включаем режим Solid (быстрее)
     int effMode = pc.shadingMode;
     if (pc.draggingAxis > 0) effMode = 1;
 
     vec3 finalColor = vec3(0.0);
     vec3 throughput = vec3(1.0);
     
-    // Configure Max Bounces based on mode
     int maxBounces = (effMode == 3) ? 2 : 1; 
     if (effMode == 0) maxBounces = 1;
 
+    // --- Рендеринг сцены ---
     for(int bounce = 0; bounce < maxBounces; bounce++) {
         float t = 0.1; float tMax = 50.0;
         float pixelRadius = 1.0 / (pc.resolution.y * 0.5);
         float objID = -1.0; bool hit = false;
         
-        // Raymarch
         int stepsTaken = 0;
         for(int i=0; i<32; i++) {
             stepsTaken++;
@@ -318,25 +311,23 @@ void main() {
             t += d;
         }
         
-        // --- MODE 0: WIREFRAME / HEATMAP ---
+        // WIREFRAME / HEATMAP
         if (effMode == 0) {
             if (hit) {
-                // Visualize steps as heatmap + simple normal
                 float heat = float(stepsTaken) / 60.0;
                 vec3 col = mix(vec3(0.1, 0.8, 0.2), vec3(0.9, 0.1, 0.1), clamp(heat, 0.0, 1.0));
-                // Add wireframe-ish feel with edge detection via normal
                 vec3 p = ro + rd * t;
                 vec3 n = getNormal(p, t);
                 float edge = 1.0 - abs(dot(n, -rd));
                 col = mix(col, vec3(1.0), pow(edge, 4.0));
                 finalColor = col;
             } else {
-                finalColor = vec3(0.15); // Dark Grid Background
+                finalColor = vec3(0.15); 
             }
-            break; // No bounces in Wire mode
+            break; 
         }
 
-        // --- LIGHTING ---
+        // Освещение
         if (hit) {
             vec3 p = ro + rd * (t - pixelRadius * t * 0.5);
             vec3 n = getNormal(p, t);
@@ -347,13 +338,14 @@ void main() {
                 albedo = scene.objects[id].color.rgb;
                 roughness = scene.objects[id].color.w;
                 metallic = scene.objects[id].params.w;
+                // Подсветка выделения
                 if (id == pc.selectedIndex) albedo = mix(albedo, vec3(1.0), 0.2);
             }
             
             vec3 lightDir = normalize(vec3(0.5, 0.8, -0.5));
             vec3 viewDir = -rd;
 
-            // --- MODE 1: SOLID (Lambert + Hard Shadow) ---
+            // SOLID MODE
             if (effMode == 1) {
                 float NdotL = max(dot(n, lightDir), 0.0);
                 float shadow = 1.0;
@@ -362,15 +354,14 @@ void main() {
                 vec3 ambient = albedo * 0.2;
                 vec3 diffuse = albedo * NdotL * shadow;
                 finalColor = ambient + diffuse;
-                break; // No bounces
+                break; 
             }
 
-            // --- MODE 2 & 3: PBR ---
+            // PBR
             vec3 directLight = calculatePBR(n, viewDir, lightDir, albedo, metallic, roughness);
             float NdotL = dot(n, lightDir);
             
             if (NdotL > 0.0) {
-                // Simplified shadow for Mode 2, Better shadow for Mode 3
                 float shadowSteps = (effMode == 3) ? 16.0 : 8.0;
                 float sh = calcSoftShadow(p + n*0.05, lightDir, 0.05, 10.0, shadowSteps); 
                 directLight *= sh;
@@ -380,16 +371,15 @@ void main() {
             vec3 ambient = (0.03 * albedo) * ao;
             finalColor += throughput * (directLight + ambient);
             
-            if (effMode == 2) break; // Material Preview: No reflections
+            if (effMode == 2) break; 
 
-            // --- MODE 3: REFLECTIONS ---
+            // Отражения (только в режиме Rendered)
             if (roughness > 0.6 || bounce >= maxBounces - 1) break;
             
             vec3 F0 = mix(vec3(0.04), albedo, metallic);
             vec3 F = fresnelSchlick(max(dot(n, viewDir), 0.0), F0);
             throughput *= F; 
             
-            // Fix: Increase offset to prevent self-intersection
             ro = p + n * 0.05; 
             rd = reflect(rd, n);
 
@@ -411,39 +401,51 @@ void main() {
     finalColor = finalColor / (finalColor + vec3(1.0));
     finalColor = pow(finalColor, vec3(1.0/2.2));
 
-    // Gizmo Overlay (Always Rendered on Top)
+    // --- ОТРИСОВКА ГИЗМО (Поверх всего / X-Ray) ---
     if (pc.selectedIndex >= 0) {
-        vec3 center = scene.objects[pc.selectedIndex].position.xyz;
+        vec3 center = pc.gizmoPos; // Берем центр, рассчитанный в main.cpp
         vec3 gRo = pc.camToWorld[3].xyz;
         vec3 gRd = mat3(pc.camToWorld) * normalize(vec3(uv, -1.8));
         float centerDist = length(center - gRo);
-        float tG = max(0.1, centerDist - 3.0); 
         
-        for(int i=0; i<45; i++) {
+        // Начинаем луч от 0.1, чтобы рисовать поверх геометрии сцены
+        float tG = 0.1; 
+        
+        // Увеличили количество шагов, чтобы линия не обрывалась
+        for(int i=0; i<80; i++) {
             vec3 p = gRo + gRd * tG;
             vec2 res = mapGizmo(p, gRo);
             float lineD = 10000.0;
+
+            // Если тянем ось (1=X, 2=Y, 3=Z), рисуем направляющую линию
             if (pc.mode == 0 && pc.draggingAxis >= 1 && pc.draggingAxis <= 3) {
                  float scale = centerDist * 0.12;
                  lineD = mapGuideLine(p, center, pc.draggingAxis, scale);
             }
+            
+            // Попадание в Гизмо
             if (res.x < 0.003 * tG) { 
                 vec3 axisCol = vec3(1.0);
-                if (res.y == 1.0) axisCol = vec3(0.9, 0.2, 0.2); 
-                if (res.y == 2.0) axisCol = vec3(0.2, 0.9, 0.2); 
-                if (res.y == 3.0) axisCol = vec3(0.2, 0.2, 0.9); 
-                if (res.y == 4.0) axisCol = vec3(1.0, 1.0, 1.0);
-                finalColor = mix(finalColor, axisCol, 0.8); break;
+                if (res.y == 1.0) axisCol = vec3(0.9, 0.2, 0.2); // Red X
+                if (res.y == 2.0) axisCol = vec3(0.2, 0.9, 0.2); // Green Y
+                if (res.y == 3.0) axisCol = vec3(0.2, 0.2, 0.9); // Blue Z
+                if (res.y == 4.0) axisCol = vec3(1.0, 1.0, 1.0); // White Center
+                finalColor = axisCol; 
+                break;
             }
+            // Попадание в направляющую линию
             if (lineD < 0.003 * tG) {
                 vec3 lineCol = vec3(1.0);
                 if (pc.draggingAxis == 1) lineCol = vec3(0.9, 0.2, 0.2);
                 if (pc.draggingAxis == 2) lineCol = vec3(0.2, 0.9, 0.2);
                 if (pc.draggingAxis == 3) lineCol = vec3(0.2, 0.2, 0.9);
-                finalColor = lineCol; break;
+                finalColor = lineCol; 
+                break;
             }
+            
             tG += max(min(abs(res.x), abs(lineD)), 0.01);
-            if (tG > centerDist + 2.0) break;
+            // Ограничиваем дальность, чтобы не считать вечно
+            if (tG > centerDist + 50.0) break;
         }
     }
 

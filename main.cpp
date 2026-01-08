@@ -1,5 +1,5 @@
 /*
-   SDF Engine - Main Source (Fixed Exports)
+   SDF Engine - Main Source (Merged: New Base + Internal Logo + Gizmo Fixes)
 */
 
 #ifdef _WIN32
@@ -41,7 +41,6 @@
 
 namespace fs = std::filesystem;
 
-// Helpers
 void updateCameraMatrix(float* m) {
     CameraBasis b = getCameraBasis();
     m[0] = b.right.x; m[1] = b.right.y; m[2] = b.right.z; m[3] = 0.0f;
@@ -50,9 +49,6 @@ void updateCameraMatrix(float* m) {
     m[12]= b.pos.x;   m[13]= b.pos.y;   m[14]= b.pos.z;   m[15]= 1.0f;
 }
 
-// =================================================================
-// --- Vulkan Engine Class ---
-// =================================================================
 class Engine {
 public:
     void run() { 
@@ -60,13 +56,14 @@ public:
         CoInitialize(NULL); 
         #endif
         g_engine = this;
-
-        // Reset scene using Scene.cpp logic
         resetScene(); 
-        
         initWindow(); 
         initVulkan(); 
         initImGui(); 
+        
+        // --- ЗАГРУЗКА ВСТРОЕННОГО ЛОГОТИПА ---
+        setupInternalLogo();
+
         mainLoop(); 
         cleanup(); 
         #ifdef _WIN32
@@ -75,7 +72,6 @@ public:
         g_engine = nullptr;
     }
 
-    // Only File IO requires Engine instance now
     void PublicSaveNos(const std::string& path) { saveNosInternal(path); }
     void PublicLoadNos(const std::string& path) { loadNosInternal(path); }
 
@@ -99,15 +95,136 @@ private:
     std::vector<VkFramebuffer> imguiFramebuffers;
     vec4 currentUiBounds = {0,0,0,0}; 
 
+    // --- РЕСУРСЫ ЛОГОТИПА ---
+    VkImage logoImage = VK_NULL_HANDLE;
+    VkDeviceMemory logoImageMemory = VK_NULL_HANDLE;
+    VkImageView logoImageView = VK_NULL_HANDLE;
+    VkSampler logoSampler = VK_NULL_HANDLE;
+
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
         auto app = reinterpret_cast<Engine*>(glfwGetWindowUserPointer(window));
         app->framebufferResized = true;
     }
 
+    // --- ГЕНЕРАТОР ЛОГОТИПА (3 АРКИ) ---
+     std::vector<unsigned char> generateLogoPixels(int width, int height) {
+        std::vector<unsigned char> pixels(width * height * 4, 0);
+
+         auto drawRect = [&](int x, int y, int w, int h) {
+            for(int i = y; i < y + h; i++) {
+                for(int j = x; j < x + w; j++) {
+                    if (j >= 0 && j < width && i >= 0 && i < height) {
+                        int idx = (i * width + j) * 4;
+                        // Рисуем БЕЛЫМ цветом (255,255,255)
+                        // Чтобы лого выделялось, мы затемним фон окна в EditorUI.cpp
+                        pixels[idx + 0] = 130; 
+                        pixels[idx + 1] = 130; 
+                        pixels[idx + 2] = 130; 
+                        pixels[idx + 3] = 255; 
+                    }
+                }
+            }
+        };
+
+        // Настройки толщины и отступов (для 64x64)
+        float t = 4.8; // Толщина линий
+        float gap = 4.8; // Отступ между арками
+        
+        // --- АРКА 1 (Внешняя) ---
+        int a1_x = 10; int a1_y = 10; int a1_w = 44; int a1_h = 44;
+        drawRect(a1_x, a1_y, t, a1_h);                  // Левая нога
+        drawRect(a1_x + a1_w - t, a1_y, t, a1_h);       // Правая нога
+        drawRect(a1_x, a1_y, a1_w, t);                  // Верх
+
+        // --- АРКА 2 (Средняя) ---
+        int a2_x = a1_x + t + gap; 
+        int a2_y = a1_y + t + gap;
+        int a2_w = a1_w - (t + gap) * 2;
+        int a2_h = a1_h - (t + gap);
+        drawRect(a2_x, a2_y, t, a2_h);                  // Левая нога
+        drawRect(a2_x + a2_w - t, a2_y, t, a2_h);       // Правая нога
+        drawRect(a2_x, a2_y, a2_w, t);                  // Верх
+
+        return pixels;
+    }
+
+    void setWindowIconInternal(const std::vector<unsigned char>& pixels, int w, int h) {
+        GLFWimage images[1]; 
+        images[0].width = w; images[0].height = h;
+        images[0].pixels = const_cast<unsigned char*>(pixels.data());
+        glfwSetWindowIcon(window, 1, images); 
+    }
+
+    void createLogoTexture(const std::vector<unsigned char>& pixels, int w, int h) {
+        VkDeviceSize imageSize = w * h * 4;
+        VkBuffer stagingBuffer; VkDeviceMemory stagingBufferMemory;
+        createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+
+        void* data; vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
+        memcpy(data, pixels.data(), static_cast<size_t>(imageSize)); vkUnmapMemory(device, stagingBufferMemory);
+
+        VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        imageInfo.imageType = VK_IMAGE_TYPE_2D; imageInfo.extent.width = w; imageInfo.extent.height = h; imageInfo.extent.depth = 1;
+        imageInfo.mipLevels = 1; imageInfo.arrayLayers = 1; imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL; imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT; imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        vkCreateImage(device, &imageInfo, nullptr, &logoImage);
+
+        VkMemoryRequirements memReqs; vkGetImageMemoryRequirements(device, logoImage, &memReqs);
+        VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        allocInfo.allocationSize = memReqs.size; allocInfo.memoryTypeIndex = findMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        vkAllocateMemory(device, &allocInfo, nullptr, &logoImageMemory); vkBindImageMemory(device, logoImage, logoImageMemory, 0);
+
+        VkCommandBufferAllocateInfo cmdAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        cmdAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; cmdAlloc.commandPool = commandPool; cmdAlloc.commandBufferCount = 1;
+        VkCommandBuffer cb; vkAllocateCommandBuffers(device, &cmdAlloc, &cb);
+        VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO}; beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cb, &beginInfo);
+
+        VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED; barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = logoImage; barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        barrier.srcAccessMask = 0; barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        VkBufferImageCopy region{}; region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}; region.imageExtent = {static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1};
+        vkCmdCopyBufferToImage(cb, stagingBuffer, logoImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL; barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        vkEndCommandBuffer(cb); VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submitInfo.commandBufferCount = 1; submitInfo.pCommandBuffers = &cb;
+        vkQueueSubmit(computeQueue, 1, &submitInfo, VK_NULL_HANDLE); vkQueueWaitIdle(computeQueue);
+        vkFreeCommandBuffers(device, commandPool, 1, &cb); vkDestroyBuffer(device, stagingBuffer, nullptr); vkFreeMemory(device, stagingBufferMemory, nullptr);
+
+        VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        viewInfo.image = logoImage; viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+        viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCreateImageView(device, &viewInfo, nullptr, &logoImageView);
+
+        VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        samplerInfo.magFilter = VK_FILTER_LINEAR; samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.maxAnisotropy = 1.0f;
+        vkCreateSampler(device, &samplerInfo, nullptr, &logoSampler);
+
+        g_AppLogoID = ImGui_ImplVulkan_AddTexture(logoSampler, logoImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    void setupInternalLogo() {
+        int w = 64, h = 64;
+        std::vector<unsigned char> pixels = generateLogoPixels(w, h);
+        setWindowIconInternal(pixels, w, h);
+        createLogoTexture(pixels, w, h);
+    }
+
     void initWindow() {
         if (!glfwInit()) throw std::runtime_error("Failed to init GLFW");
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); 
-        window = glfwCreateWindow(INITIAL_WIDTH, INITIAL_HEIGHT, "SDF Engine", nullptr, nullptr);
+        window = glfwCreateWindow(INITIAL_WIDTH, INITIAL_HEIGHT, "Next Level Signed Distance Field Engine", nullptr, nullptr);
         if (!window) throw std::runtime_error("Failed to create window");
         glfwSetWindowUserPointer(window, this);
         glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
@@ -117,7 +234,6 @@ private:
         glfwSetScrollCallback(window, scroll_callback);
     }
     
-    // --- VULKAN HELPERS ---
     uint32_t findMemoryType(uint32_t f, VkMemoryPropertyFlags p) { VkPhysicalDeviceMemoryProperties m; vkGetPhysicalDeviceMemoryProperties(physicalDevice, &m); for(uint32_t i=0; i<m.memoryTypeCount; i++) if((f&(1<<i))&&(m.memoryTypes[i].propertyFlags&p)==p) return i; throw std::runtime_error("mem"); }
     void createBuffer(VkDeviceSize s, VkBufferUsageFlags u, VkMemoryPropertyFlags p, VkBuffer& b, VkDeviceMemory& m) { VkBufferCreateInfo i{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; i.size=s; i.usage=u; vkCreateBuffer(device,&i,nullptr,&b); VkMemoryRequirements r; vkGetBufferMemoryRequirements(device,b,&r); VkMemoryAllocateInfo a{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO}; a.allocationSize=r.size; a.memoryTypeIndex=findMemoryType(r.memoryTypeBits,p); vkAllocateMemory(device,&a,nullptr,&m); vkBindBufferMemory(device,b,m,0); }
     
@@ -272,7 +388,6 @@ private:
         }
     }
     
-    // --- VULKAN INIT ---
     void initVulkan() { 
         createInstance(); createSurface(); pickPhysicalDevice(); createLogicalDevice(); createSwapchain(); createImageViews(); 
         createSSBO(); createDescriptors(); createPipeline(); 
@@ -280,7 +395,6 @@ private:
         createCommandPool(); createCommandBuffers(); createSyncObjects(); 
     }
     
-    // --- IMGUI INIT ---
     void initImGui() {
         VkDescriptorPoolSize pool_sizes[] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 } };
         VkDescriptorPoolCreateInfo pool_info = {};
@@ -297,8 +411,6 @@ private:
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         setupImGuiStyle();
-
-
 
         ImGui_ImplGlfw_InitForVulkan(window, true);
         ImGui_ImplVulkan_InitInfo init_info = {};
@@ -383,7 +495,6 @@ private:
         }
     }
 
-    // --- Vulkan Standard Boilerplate (Condensed) ---
     void createInstance() { VkApplicationInfo a{VK_STRUCTURE_TYPE_APPLICATION_INFO,nullptr,"SDF",1,"",1,VK_API_VERSION_1_3}; uint32_t c; const char** e=glfwGetRequiredInstanceExtensions(&c); VkInstanceCreateInfo i{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,nullptr,0,&a,0,nullptr,c,e}; vkCreateInstance(&i,nullptr,&instance); }
     void createSurface() { glfwCreateWindowSurface(instance,window,nullptr,&surface); }
     void pickPhysicalDevice() { uint32_t c; vkEnumeratePhysicalDevices(instance,&c,nullptr); std::vector<VkPhysicalDevice> d(c); vkEnumeratePhysicalDevices(instance,&c,d.data()); physicalDevice=d[0]; }
@@ -440,6 +551,12 @@ private:
         pc.uiMinX = currentUiBounds.x; pc.uiMinY = currentUiBounds.y; pc.uiMaxX = currentUiBounds.z; pc.uiMaxY = currentUiBounds.w;
         pc.shadingMode = currentShadingMode;
         
+        // --- GIZMO POSITION RESTORATION ---
+        vec3 center = getSelectionCenter();
+        pc.gizmoPos[0] = center.x;
+        pc.gizmoPos[1] = center.y;
+        pc.gizmoPos[2] = center.z;
+
         updateCameraMatrix(pc.camToWorld);
         vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
         vkCmdDispatch(cb, (swapchainExtent.width+15)/16, (swapchainExtent.height+15)/16, 1);
@@ -470,7 +587,7 @@ private:
         while (!glfwWindowShouldClose(window)) {
             double currentTime = glfwGetTime(); float deltaTime = (float)(currentTime - lastTime); lastTime = currentTime;
             frameCount++;
-            if (currentTime - fpsTimer >= 1.0) { std::string title = "SDF Engine | FPS: " + std::to_string(frameCount); glfwSetWindowTitle(window, title.c_str()); frameCount=0; fpsTimer=currentTime; }
+            if (currentTime - fpsTimer >= 1.0) { std::string title = "Next Level Signed Distance Field Engine | FPS: " + std::to_string(frameCount); glfwSetWindowTitle(window, title.c_str()); frameCount=0; fpsTimer=currentTime; }
             glfwPollEvents(); 
             processInput(window, deltaTime); // From Input.h
             renderUI(window); // From EditorUI.h
@@ -499,6 +616,13 @@ private:
 
     void cleanup() {
         vkDeviceWaitIdle(device); 
+        
+        // --- CLEANUP LOGO ---
+        if(logoSampler) vkDestroySampler(device, logoSampler, nullptr);
+        if(logoImageView) vkDestroyImageView(device, logoImageView, nullptr);
+        if(logoImage) vkDestroyImage(device, logoImage, nullptr);
+        if(logoImageMemory) vkFreeMemory(device, logoImageMemory, nullptr);
+
         ImGui_ImplVulkan_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
@@ -516,7 +640,6 @@ private:
 void* g_engine = nullptr;
 
 // Exported C++ wrappers implementation
-// FIXED: Removed wrappers for ResetScene, Delete, Duplicate, Undo because logic moved to Scene.cpp
 void Engine_PublicSaveNos(const std::string& path) { if (g_engine) reinterpret_cast<Engine*>(g_engine)->PublicSaveNos(path); }
 void Engine_PublicLoadNos(const std::string& path) { if (g_engine) reinterpret_cast<Engine*>(g_engine)->PublicLoadNos(path); }
 
