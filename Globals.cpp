@@ -11,7 +11,8 @@ bool showToolSettings = true;
 int currentShadingMode = 1;
 std::string defaultExportPath = "";
 
-std::vector<ObjectData> sceneObjects;
+std::vector<SceneNode> sceneGraph;
+std::vector<ObjectData> gpuObjectCache;
 std::vector<int> selectedIndices;
 std::vector<ObjectData> clipboard;
 Notification toast;

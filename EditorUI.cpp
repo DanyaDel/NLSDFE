@@ -328,36 +328,28 @@ void renderUI(GLFWwindow* window) {
                 int activeIdx = selectedIndices.back();
                 if (activeIdx < sceneObjects.size()) {
                     ObjectData& obj = sceneObjects[activeIdx];
-                    ImGui::TextColored(ImVec4(0.28f, 0.56f, 0.90f, 1.00f), "Active Object %d", activeIdx);
+
                     ImGui::Separator();
-                    if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-                        ImGui::Dummy(ImVec2(0, 5));
-                        ImGui::Text("Position"); ImGui::DragFloat3("##Pos", &obj.position.x, 0.05f);
-                        ImGui::Text("Rotation");
-                        if (ImGui::DragFloat3("##Rot", &obj.rotationEuler.x, 0.05f)) { 
-                            vec3 r = {obj.rotationEuler.x, obj.rotationEuler.y, obj.rotationEuler.z}; 
-                            obj.invRotation = createInverseRotationMatrix4x4(r); 
-                        }
-                        ImGui::Text("Scale"); ImGui::DragFloat3("##Scale", &obj.scale.x, 0.05f);
+
+                    // Geometry (SDF данные)
+                    if (ImGui::CollapsingHeader("Geometry", ImGuiTreeNodeFlags_DefaultOpen)) {
+                        const char* shapes[] = { "Sphere", "Box" };
+                        int type = (int)obj.position.w;
+                        if (ImGui::Combo("Shape", &type, shapes, 2)) obj.position.w = (float)type;
+
+                        ImGui::DragFloat("Radius/Size", &obj.params.x, 0.05f);
+                        ImGui::DragFloat("Smoothness", &obj.params.z, 0.01f, 0.0f, 2.0f);
                     }
-                    if (ImGui::CollapsingHeader("Geometry (SDF)", ImGuiTreeNodeFlags_DefaultOpen)) {
-                         const char* shapes[] = { "Sphere", "Box" };
-                         int type = (int)obj.position.w;
-                         if (ImGui::Combo("Shape", &type, shapes, IM_ARRAYSIZE(shapes))) obj.position.w = (float)type;
-                         const char* ops[] = { "Union", "Subtract", "Intersect" };
-                         int op = (int)obj.params.y;
-                         if (ImGui::Combo("Blend Op", &op, ops, IM_ARRAYSIZE(ops))) obj.params.y = (float)op;
-                         ImGui::DragFloat("Smoothness", &obj.params.z, 0.01f, 0.0f, 2.0f);
-                         ImGui::DragFloat("Radius/Size", &obj.params.x, 0.05f, 0.001f, 100.0f);
-                    }
+
+                    // Material
                     if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
                         ImGui::ColorEdit3("Color", &obj.color.x);
                         ImGui::SliderFloat("Metallic", &obj.params.w, 0.0f, 1.0f);
-                        ImGui::SliderFloat("Roughness", &obj.color.w, 0.0f, 1.0f);
                     }
-                    if (ImGui::Button("DELETE OBJECT", ImVec2(-1, 30))) { deleteSelectedObject(); }
                 }
-            } else { ImGui::TextDisabled("Select an object."); }
+            } else {
+                ImGui::TextDisabled("Select an object in hierarchy");
+            }
         }
         ImGui::End();
     }
@@ -415,6 +407,64 @@ void renderUI(GLFWwindow* window) {
     renderChangelogWindow();
     renderAboutWindow();
     ImGui::Render();
+}
+
+void DrawSceneNode(int nodeIdx) {
+    SceneNode& node = sceneGraph[nodeIdx];
+
+    // Настройка флагов дерева
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+    
+    // Если у объекта нет детей, рисуем его как "листок" (без стрелочки)
+    if (node.children.empty()) {
+        flags |= ImGuiTreeNodeFlags_Leaf;
+    }
+
+    // Проверяем, выбран ли этот объект
+    bool isSelected = false;
+    for (int sel : selectedIndices) {
+        if (sel == nodeIdx) {
+            isSelected = true;
+            break;
+        }
+    }
+    if (isSelected) flags |= ImGuiTreeNodeFlags_Selected;
+
+    // Рисуем сам узел
+    bool nodeOpen = ImGui::TreeNodeEx((void*)(intptr_t)nodeIdx, flags, "%s", node.name.c_str());
+
+    // Логика выделения
+    if (ImGui::IsItemClicked()) {
+        if (!ImGui::GetIO().KeyShift) {
+            selectedIndices.clear();
+        }
+        selectedIndices.push_back(nodeIdx);
+    }
+
+    // --- DRAG AND DROP (Перепривязка родителя) ---
+    if (ImGui::BeginDragDropSource()) {
+        ImGui::SetDragDropPayload("NODE_INDEX", &nodeIdx, sizeof(int));
+        ImGui::Text("Moving %s", node.name.c_str());
+        ImGui::EndDragDropSource();
+    }
+
+    if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("NODE_INDEX")) {
+            int draggedIdx = *(const int*)payload->Data;
+            if (draggedIdx != nodeIdx) { // Нельзя приреновать самого к себе
+                reparent(draggedIdx, nodeIdx);
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
+
+    // Если узел развернут, рисуем детей
+    if (nodeOpen) {
+        for (int childIdx : node.children) {
+            DrawSceneNode(childIdx);
+        }
+        ImGui::TreePop();
+    }
 }
 
 void setupImGuiStyle() {

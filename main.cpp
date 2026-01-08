@@ -381,10 +381,30 @@ private:
     }
 
     void createSSBO() { createBuffer(sizeof(ObjectData)*MAX_OBJECTS, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, sceneBuffer, sceneBufferMemory); vkMapMemory(device, sceneBufferMemory, 0, sizeof(ObjectData)*MAX_OBJECTS, 0, &sceneBufferMapped); }
-    void updateSSBO() { 
-        if (!sceneObjects.empty()) {
-            updateObjectMatrices();
-            memcpy(sceneBufferMapped, sceneObjects.data(), sceneObjects.size() * sizeof(ObjectData)); 
+    void updateSSBO() {
+        // 1. Очищаем кэш для GPU
+        gpuObjectCache.clear();
+
+        // 2. Матрица идентичности для корня
+        mat4 identity; 
+        for(int i=0; i<16; i++) identity.m[i] = (i%5 == 0) ? 1.0f : 0.0f;
+
+        // 3. Обновляем иерархию (начинаем с тех, у кого нет родителя)
+        for (int i = 0; i < sceneGraph.size(); i++) {
+            if (sceneGraph[i].parent == -1) {
+                updateHierarchy(i, identity);
+            }
+        }
+
+        // 4. Заполняем плоский массив для шейдера
+        for (const auto& node : sceneGraph) {
+            gpuObjectCache.push_back(node.gpuData);
+            if (gpuObjectCache.size() >= MAX_OBJECTS) break;
+        }
+
+        // 5. Копируем в маппированную память Vulkan
+        if (!gpuObjectCache.empty()) {
+            memcpy(sceneBufferMapped, gpuObjectCache.data(), gpuObjectCache.size() * sizeof(ObjectData));
         }
     }
     
@@ -551,8 +571,23 @@ private:
         pc.uiMinX = currentUiBounds.x; pc.uiMinY = currentUiBounds.y; pc.uiMaxX = currentUiBounds.z; pc.uiMaxY = currentUiBounds.w;
         pc.shadingMode = currentShadingMode;
         
-        // --- GIZMO POSITION RESTORATION ---
-        vec3 center = getSelectionCenter();
+        // --- GIZMO POSITION RESTОРATION ---
+        vec3 center = {0, 0, 0};
+        if (!selectedIndices.empty()) {
+            for (int idx : selectedIndices) {
+                if (idx < sceneObjects.size()) {
+                    center.x += sceneObjects[idx].position.x;
+                    center.y += sceneObjects[idx].position.y;
+                    center.z += sceneObjects[idx].position.z;
+                }
+            }
+            float count = (float)selectedIndices.size();
+            if (count > 0) {
+                center.x /= count;
+                center.y /= count;
+                center.z /= count;
+            }
+        }
         pc.gizmoPos[0] = center.x;
         pc.gizmoPos[1] = center.y;
         pc.gizmoPos[2] = center.z;
@@ -617,7 +652,7 @@ private:
     void cleanup() {
         vkDeviceWaitIdle(device); 
         
-        // --- CLEANUP LOGO ---
+        // --- CLEANUP LOGО ---
         if(logoSampler) vkDestroySampler(device, logoSampler, nullptr);
         if(logoImageView) vkDestroyImageView(device, logoImageView, nullptr);
         if(logoImage) vkDestroyImage(device, logoImage, nullptr);

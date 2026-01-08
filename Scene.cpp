@@ -44,6 +44,65 @@ vec3 getSelectionCenter() {
     return center;
 }
 
+mat4 composeMatrix(vec3 p, vec3 r, vec3 s) {
+    // 1. Матрица вращения (ты уже используешь Euler YXZ или XYZ)
+    // Используем косинусы и синусы углов
+    float cx = cos(r.x), sx = sin(r.x);
+    float cy = cos(r.y), sy = sin(r.y);
+    float cz = cos(r.z), sz = sin(r.z);
+
+    mat4 res;
+
+    // Комбинированная матрица R * S (Вращение * Масштаб)
+    // Мы сразу вставляем масштаб в оси вращения, чтобы сэкономить на умножении матриц
+    res.m[0] = (cy * cz) * s.x;
+    res.m[1] = (cz * sx * sy - cx * sz) * s.x;
+    res.m[2] = (cx * cz * sy + sx * sz) * s.x;
+    res.m[3] = 0.0f;
+
+    res.m[4] = (cy * sz) * s.y;
+    res.m[5] = (cx * cz + sx * sy * sz) * s.y;
+    res.m[6] = (-cz * sx + cx * sy * sz) * s.y;
+    res.m[7] = 0.0f;
+
+    res.m[8] = (-sy) * s.z;
+    res.m[9] = (cy * sx) * s.z;
+    res.m[10] = (cx * cy) * s.z;
+    res.m[11] = 0.0f;
+
+    // 2. Translation (Перенос) - это последний столбец матрицы
+    res.m[12] = p.x;
+    res.m[13] = p.y;
+    res.m[14] = p.z;
+    res.m[15] = 1.0f;
+
+    return res;
+}
+
+void updateHierarchy(int nodeIdx, mat4 parentWorldMatrix) {
+    SceneNode& node = sceneGraph[nodeIdx];
+
+    // 1. Строим локальную матрицу
+    mat4 localMatrix = composeMatrix(node.localPosition, node.localRotation, node.localScale);
+
+    // 2. Вычисляем мировую матрицу: ParentWorld * Local
+    mat4 worldMatrix = multiplyMatrices(parentWorldMatrix, localMatrix); 
+
+    // 3. Извлекаем мировые данные для GPU
+    // Важно: SDF шейдеру нужны мировые позиции
+    node.gpuData.position.x = worldMatrix.m[12]; // Translation X
+    node.gpuData.position.y = worldMatrix.m[13]; // Translation Y
+    node.gpuData.position.z = worldMatrix.m[14]; // Translation Z
+    
+    // Инвертируем вращение для шейдера (чтобы трансформировать луч в локальное пространство объекта)
+    node.gpuData.invRotation = inverse(extractRotation(worldMatrix));
+
+    // 4. Рекурсивно обновляем детей
+    for (int childIdx : node.children) {
+        updateHierarchy(childIdx, worldMatrix);
+    }
+}
+
 void deleteSelectedObject() {
     if (selectedIndices.empty()) return;
     saveUndo();
