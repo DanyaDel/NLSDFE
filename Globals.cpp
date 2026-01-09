@@ -1,6 +1,5 @@
 #include "Common.h"
-
-// --- Global Variables Definition ---
+#include "Scene.h"
 
 float guiAlpha = 1.0f;
 bool showSettingsWindow = false;
@@ -14,7 +13,7 @@ std::string defaultExportPath = "";
 std::vector<SceneNode> sceneGraph;
 std::vector<ObjectData> gpuObjectCache;
 std::vector<int> selectedIndices;
-std::vector<ObjectData> clipboard;
+std::vector<SceneNode> clipboardNodes;
 Notification toast;
 std::string currentLoadedFile = "Untitled";
 NosHeader lastLoadedHeader = {};
@@ -35,7 +34,6 @@ bool isDraggingGizmo = false;
 bool showGizmos = true;
 bool showChangelog = true;
 
-// Инициализация переменной логотипа
 void* g_AppLogoID = nullptr;
 
 void showToast(std::string text) {

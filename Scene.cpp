@@ -4,12 +4,32 @@
 #include <algorithm>
 #include <numeric>
 
+// --- Matrix Helpers for Scene ---
+mat4 calculateWorldMatrix(int nodeIdx) {
+    if (nodeIdx < 0 || nodeIdx >= (int)sceneGraph.size()) return identityMatrix();
+    
+    // Рекурсия для получения матрицы родителя
+    mat4 parentMat = identityMatrix();
+    if (sceneGraph[nodeIdx].parent != -1) {
+        parentMat = calculateWorldMatrix(sceneGraph[nodeIdx].parent);
+    }
+
+    // Локальная матрица
+    mat4 localMat = composeMatrix(
+        sceneGraph[nodeIdx].localPosition, 
+        sceneGraph[nodeIdx].localRotation, 
+        sceneGraph[nodeIdx].localScale
+    );
+
+    return multiplyMatrices(parentMat, localMat);
+}
+
 std::vector<UndoState> undoStack;
 
-uint32_t calculateChecksum(const std::vector<ObjectData>& objects) {
-    if (objects.empty()) return 0;
-    const uint8_t* data = reinterpret_cast<const uint8_t*>(objects.data());
-    size_t size = objects.size() * sizeof(ObjectData);
+uint32_t calculateChecksum(const std::vector<SceneNode>& nodes) {
+    if (nodes.empty()) return 0;
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(&nodes[0].gpuData);
+    size_t size = nodes.size() * sizeof(ObjectData);
     uint32_t sum = 0;
     for (size_t i = 0; i < size; ++i) sum += data[i];
     return sum;
@@ -17,89 +37,109 @@ uint32_t calculateChecksum(const std::vector<ObjectData>& objects) {
 
 void saveUndo() {
     if (undoStack.size() > 50) undoStack.erase(undoStack.begin()); 
-    undoStack.push_back({sceneObjects, selectedIndices});
+    undoStack.push_back({sceneGraph, selectedIndices});
 }
 
 void performUndo() {
     if (undoStack.empty()) return;
     UndoState state = undoStack.back();
     undoStack.pop_back();
-    sceneObjects = state.objects;
+    sceneGraph = state.objects;
     selectedIndices = state.selection;
 }
 
 vec3 getSelectionCenter() {
     if (selectedIndices.empty()) return {0,0,0};
     vec3 center = {0,0,0};
+    int count = 0;
     for (int idx : selectedIndices) {
-        if(idx < sceneObjects.size()) {
-            center.x += sceneObjects[idx].position.x;
-            center.y += sceneObjects[idx].position.y;
-            center.z += sceneObjects[idx].position.z;
+        if(idx < sceneGraph.size()) {
+            // Берем уже посчитанную мировую позицию из GPU Data
+            center.x += sceneGraph[idx].gpuData.position.x;
+            center.y += sceneGraph[idx].gpuData.position.y;
+            center.z += sceneGraph[idx].gpuData.position.z;
+            count++;
         }
     }
-    center.x /= (float)selectedIndices.size();
-    center.y /= (float)selectedIndices.size();
-    center.z /= (float)selectedIndices.size();
+    if(count > 0) center = center / (float)count;
     return center;
 }
 
-mat4 composeMatrix(vec3 p, vec3 r, vec3 s) {
-    // 1. Матрица вращения (ты уже используешь Euler YXZ или XYZ)
-    // Используем косинусы и синусы углов
-    float cx = cos(r.x), sx = sin(r.x);
-    float cy = cos(r.y), sy = sin(r.y);
-    float cz = cos(r.z), sz = sin(r.z);
+void reparent(int childIdx, int newParentIdx) {
+    if (childIdx == newParentIdx) return;
+    if (childIdx < 0 || childIdx >= (int)sceneGraph.size()) return;
 
-    mat4 res;
+    // Проверка циклов
+    int checkIdx = newParentIdx;
+    while (checkIdx != -1) {
+        if (checkIdx == childIdx) return; 
+        checkIdx = sceneGraph[checkIdx].parent;
+    }
 
-    // Комбинированная матрица R * S (Вращение * Масштаб)
-    // Мы сразу вставляем масштаб в оси вращения, чтобы сэкономить на умножении матриц
-    res.m[0] = (cy * cz) * s.x;
-    res.m[1] = (cz * sx * sy - cx * sz) * s.x;
-    res.m[2] = (cx * cz * sy + sx * sz) * s.x;
-    res.m[3] = 0.0f;
+    SceneNode& child = sceneGraph[childIdx];
+    
+    // 1. Сохраняем текущее мировое состояние
+    mat4 worldMat = calculateWorldMatrix(childIdx);
+    
+    // 2. Отцепляем от старого
+    if (child.parent != -1) {
+        auto& oldChildren = sceneGraph[child.parent].children;
+        oldChildren.erase(std::remove(oldChildren.begin(), oldChildren.end(), childIdx), oldChildren.end());
+    }
 
-    res.m[4] = (cy * sz) * s.y;
-    res.m[5] = (cx * cz + sx * sy * sz) * s.y;
-    res.m[6] = (-cz * sx + cx * sy * sz) * s.y;
-    res.m[7] = 0.0f;
-
-    res.m[8] = (-sy) * s.z;
-    res.m[9] = (cy * sx) * s.z;
-    res.m[10] = (cx * cy) * s.z;
-    res.m[11] = 0.0f;
-
-    // 2. Translation (Перенос) - это последний столбец матрицы
-    res.m[12] = p.x;
-    res.m[13] = p.y;
-    res.m[14] = p.z;
-    res.m[15] = 1.0f;
-
-    return res;
+    // 3. Прицепляем к новому
+    child.parent = newParentIdx;
+    if (newParentIdx != -1) {
+        sceneGraph[newParentIdx].children.push_back(childIdx);
+        
+        // 4. Пересчитываем Local = InvParentWorld * World
+        // Чтобы объект визуально остался на месте
+        mat4 parentWorld = calculateWorldMatrix(newParentIdx);
+        mat4 invParent = inverseMatrix(parentWorld);
+        mat4 newLocal = multiplyMatrices(invParent, worldMat);
+        
+        decomposeMatrix(newLocal, child.localPosition, child.localRotation, child.localScale);
+    } else {
+        // Если кинули в корень, то Local = World
+        decomposeMatrix(worldMat, child.localPosition, child.localRotation, child.localScale);
+    }
 }
 
-void updateHierarchy(int nodeIdx, mat4 parentWorldMatrix) {
+// Ключевая функция обновления
+void updateHierarchy(int nodeIdx, mat4 parentWorldMat) {
+    if (nodeIdx >= sceneGraph.size()) return;
     SceneNode& node = sceneGraph[nodeIdx];
 
-    // 1. Строим локальную матрицу
-    mat4 localMatrix = composeMatrix(node.localPosition, node.localRotation, node.localScale);
+    // 1. Считаем мировую матрицу: P * L
+    mat4 localMat = composeMatrix(node.localPosition, node.localRotation, node.localScale);
+    mat4 worldMat = multiplyMatrices(parentWorldMat, localMat);
 
-    // 2. Вычисляем мировую матрицу: ParentWorld * Local
-    mat4 worldMatrix = multiplyMatrices(parentWorldMatrix, localMatrix); 
+    // 2. Разбираем мировую матрицу на компоненты для шейдера
+    // Шейдер ничего не знает про родителей, ему нужны честные координаты в мире.
+    vec3 wPos, wRot, wScale;
+    decomposeMatrix(worldMat, wPos, wRot, wScale);
 
-    // 3. Извлекаем мировые данные для GPU
-    // Важно: SDF шейдеру нужны мировые позиции
-    node.gpuData.position.x = worldMatrix.m[12]; // Translation X
-    node.gpuData.position.y = worldMatrix.m[13]; // Translation Y
-    node.gpuData.position.z = worldMatrix.m[14]; // Translation Z
+    // 3. Записываем в GPU структуру
+    node.gpuData.position.x = wPos.x;
+    node.gpuData.position.y = wPos.y;
+    node.gpuData.position.z = wPos.z;
     
-    // Инвертируем вращение для шейдера (чтобы трансформировать луч в локальное пространство объекта)
-    node.gpuData.invRotation = inverse(extractRotation(worldMatrix));
+    node.gpuData.scale.x = wScale.x;
+    node.gpuData.scale.y = wScale.y;
+    node.gpuData.scale.z = wScale.z;
 
-    // 4. Рекурсивно обновляем детей
+    // ВАЖНО: wRot содержит вращение объекта + вращение родителя.
+    // Это заставит объект повернуться правильно.
+    node.gpuData.invRotation = createInverseRotationMatrix4x4(wRot);
+    
+    // Сохраняем для рейкастинга (выделения мышкой)
+    node.gpuData.rotationEuler.x = wRot.x;
+    node.gpuData.rotationEuler.y = wRot.y;
+    node.gpuData.rotationEuler.z = wRot.z;
+
+    // 4. Идем к детям, передавая им нашу НОВУЮ мировую матрицу
     for (int childIdx : node.children) {
-        updateHierarchy(childIdx, worldMatrix);
+        updateHierarchy(childIdx, worldMat);
     }
 }
 
@@ -108,8 +148,22 @@ void deleteSelectedObject() {
     saveUndo();
     std::sort(selectedIndices.rbegin(), selectedIndices.rend());
     for (int idx : selectedIndices) {
-        if (idx < sceneObjects.size()) {
-            sceneObjects.erase(sceneObjects.begin() + idx);
+        if (idx < sceneGraph.size()) {
+            int pIdx = sceneGraph[idx].parent;
+            if (pIdx != -1 && pIdx < sceneGraph.size()) {
+                auto& c = sceneGraph[pIdx].children;
+                c.erase(std::remove(c.begin(), c.end(), idx), c.end());
+            }
+            // Детей пока делаем сиротами (в корень)
+            for(int child : sceneGraph[idx].children) {
+                if(child < sceneGraph.size()) sceneGraph[child].parent = -1;
+            }
+            sceneGraph.erase(sceneGraph.begin() + idx);
+            // Сдвиг индексов (очень дорого, но для примера сойдет)
+            for(auto& node : sceneGraph) {
+                if(node.parent > idx) node.parent--;
+                for(int& c : node.children) if(c > idx) c--;
+            }
         }
     }
     selectedIndices.clear();
@@ -119,41 +173,44 @@ void duplicateSelectedObject() {
     if (selectedIndices.empty()) return;
     saveUndo();
     std::vector<int> newIndices;
-    int currentSize = (int)sceneObjects.size();
+    int currentSize = (int)sceneGraph.size();
     for (int idx : selectedIndices) {
-        if (sceneObjects.size() >= MAX_OBJECTS) break;
-        if (idx >= sceneObjects.size()) continue;
-        ObjectData newObj = sceneObjects[idx];
-        newObj.position.x += 0.5f; 
-        newObj.position.z += 0.5f;
-        sceneObjects.push_back(newObj);
+        if (sceneGraph.size() >= MAX_OBJECTS) break;
+        SceneNode newNode = sceneGraph[idx];
+        newNode.name += "_Copy";
+        newNode.localPosition.x += 1.0f;
+        newNode.parent = -1; // Копия падает в корень
+        newNode.children.clear(); 
+        sceneGraph.push_back(newNode);
         newIndices.push_back(currentSize++);
     }
     selectedIndices = newIndices;
 }
 
-void updateObjectMatrices() {
-    for(auto& obj : sceneObjects) {
-        vec3 rot = {obj.rotationEuler.x, obj.rotationEuler.y, obj.rotationEuler.z};
-        obj.invRotation = createInverseRotationMatrix4x4(rot);
-    }
-}
-
-// Реализация сброса сцены (соответствует объявлению в Common.h)
 void resetScene() {
     undoStack.clear();
     selectedIndices.clear();
-    sceneObjects.clear();
+    sceneGraph.clear();
     
-    mat4 identity; 
-    memset(&identity, 0, sizeof(mat4)); 
-    identity.m[0]=1; identity.m[5]=1; identity.m[10]=1; identity.m[15]=1;
-    
-    // Дефолтные объекты
-    sceneObjects.push_back({identity, {0, 0.5f, 0, 0.0f}, {1,1,1,0}, {0.8f, 0.0f, 0.2f, 1.0f}, {1.0f, 0.8f, 0.1f, 0.2f}, {0,0,0,0}});
-    sceneObjects.push_back({identity, {0.6f, 0.8f, 0.4f, 1.0f}, {0.8f, 0.8f, 0.8f, 0}, {0.6f, 1.0f, 0.1f, 0.0f}, {0.2f, 0.4f, 1.0f, 0.8f}, {0.5f, 0.5f, 0.0f, 0}});
-    sceneObjects.push_back({identity, {0, -1.0f, 0, 1.0f}, {6, 0.1f, 6, 0}, {1.0f, 0.0f, 0.0f, 0.0f}, {0.1f, 0.1f, 0.15f, 0.9f}, {0,0,0,0}});
-    
+    mat4 identity = identityMatrix();
+    auto addNode = [&](std::string name, int type, vec3 pos, vec3 scale, vec3 col) {
+        SceneNode n;
+        n.name = name;
+        n.localPosition = pos;
+        n.localScale = scale;
+        n.gpuData.invRotation = identity;
+        n.gpuData.position = {0,0,0, (float)type}; 
+        n.gpuData.scale = {1,1,1,0};
+        n.gpuData.params = {1.0f, 0, 0.1f, 0}; 
+        n.gpuData.color = {col.x, col.y, col.z, 1.0f};
+        n.gpuData.rotationEuler = {0,0,0,0};
+        sceneGraph.push_back(n);
+    };
+
+    addNode("Sphere", 0, {0, 0.5f, 0}, {1,1,1}, {0.8f, 0.0f, 0.2f});
+    addNode("Cube", 1, {2.0f, 0.5f, 0}, {1,1,1}, {0.1f, 0.4f, 0.8f});
+    addNode("Floor", 1, {0, -1.0f, 0}, {8, 0.1f, 8}, {0.2f, 0.2f, 0.2f});
+
     currentLoadedFile = "Untitled";
 }
 

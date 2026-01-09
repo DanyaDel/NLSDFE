@@ -47,20 +47,25 @@ GizmoAxis checkGizmoIntersection(Ray ray, vec3 pivotPos, vec3 camPos) {
     GizmoAxis hit = AXIS_NONE;
 
     if (currentMode == MODE_MOVE || currentMode == MODE_SCALE) {
-        if (intersectSphere(ray, pivotPos, 0.3f * scale) > 0.0f) return AXIS_CENTER;
-        float totalLen = 1.3f * scale; float hitThick = 0.25f * scale; 
+        if (intersectSphere(ray, pivotPos, 0.25f * scale) > 0.0f) return AXIS_CENTER;
+        
+        float totalLen = 1.3f * scale; 
+        float hitThick = 0.35f * scale;
+        
         float bx = intersectBox(ray, pivotPos + vec3{totalLen/2.0f, 0, 0}, {totalLen/2.0f, hitThick, hitThick});
         float by = intersectBox(ray, pivotPos + vec3{0, totalLen/2.0f, 0}, {hitThick, totalLen/2.0f, hitThick});
         float bz = intersectBox(ray, pivotPos + vec3{0, 0, totalLen/2.0f}, {hitThick, hitThick, totalLen/2.0f});
+        
         if (bx > 0 && bx < minD) { minD = bx; hit = AXIS_X; }
         if (by > 0 && by < minD) { minD = by; hit = AXIS_Y; }
         if (bz > 0 && bz < minD) { minD = bz; hit = AXIS_Z; }
     }
     else if (currentMode == MODE_ROTATE) {
-        float r = 1.0f * scale; float thick = 0.2f * scale;
+        float r = 1.0f * scale; 
+        float thick = 0.2f * scale;
         float dX = intersectRing(ray, pivotPos, 0, r, thick); 
-        float dY = intersectRing(ray, pivotPos, 2, r, thick); 
-        float dZ = intersectRing(ray, pivotPos, 1, r, thick); 
+        float dY = intersectRing(ray, pivotPos, 1, r, thick); 
+        float dZ = intersectRing(ray, pivotPos, 2, r, thick); 
         if (dX < minD) { minD = dX; hit = AXIS_X; }
         if (dY < minD) { minD = dY; hit = AXIS_Y; }
         if (dZ < minD) { minD = dZ; hit = AXIS_Z; }
@@ -137,8 +142,10 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                 float maxX = std::max((float)mousePressX, (float)x);
                 float minY = std::min((float)mousePressY, (float)y);
                 float maxY = std::max((float)mousePressY, (float)y);
-                for(int i=0; i<sceneObjects.size(); i++) {
-                    vec3 p = {sceneObjects[i].position.x, sceneObjects[i].position.y, sceneObjects[i].position.z};
+                
+                for(int i=0; i<sceneGraph.size(); i++) {
+                    const auto& od = sceneGraph[i].gpuData;
+                    vec3 p = {od.position.x, od.position.y, od.position.z};
                     vec2 screenPos;
                     if (projectWorldToScreen(p, (float)w, (float)h, screenPos)) {
                         if (screenPos.x >= minX && screenPos.x <= maxX && screenPos.y >= minY && screenPos.y <= maxY) {
@@ -153,15 +160,19 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                 Ray ray = getRayFromMouse((float)x, (float)y, (float)w, (float)h);
                 float minD = 10000.0f;
                 int hitIndex = -1;
-                for(int i=0; i<sceneObjects.size(); i++) {
-                    vec3 p = {sceneObjects[i].position.x, sceneObjects[i].position.y, sceneObjects[i].position.z};
-                    vec3 rot = {sceneObjects[i].rotationEuler.x, sceneObjects[i].rotationEuler.y, sceneObjects[i].rotationEuler.z};
-                    vec3 scl = {sceneObjects[i].scale.x, sceneObjects[i].scale.y, sceneObjects[i].scale.z};
-                    float size = sceneObjects[i].params.x;
-                    int type = (int)sceneObjects[i].position.w;
+                
+                for(int i=0; i<sceneGraph.size(); i++) {
+                    const auto& od = sceneGraph[i].gpuData;
+                    vec3 p = {od.position.x, od.position.y, od.position.z};
+                    vec3 rot = {od.rotationEuler.x, od.rotationEuler.y, od.rotationEuler.z};
+                    vec3 scl = {od.scale.x, od.scale.y, od.scale.z}; 
+                    float size = od.params.x;
+                    int type = (int)od.position.w;
                     float d = -1.0f;
+                    
                     if (type == 0) d = intersectEllipsoid(ray, p, rot, scl, size);
                     else if (type == 1) d = intersectBoxOBB(ray, p, rot, scl, size);
+                    
                     if (d > 0.0f && d < minD) { minD = d; hitIndex = i; }
                 }
                 
@@ -169,11 +180,8 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 
                 if (hitIndex != -1) {
                     auto it = std::find(selectedIndices.begin(), selectedIndices.end(), hitIndex);
-                    if (it != selectedIndices.end() && (mods & GLFW_MOD_SHIFT)) {
-                        selectedIndices.erase(it);
-                    } else if (it == selectedIndices.end()) {
-                        selectedIndices.push_back(hitIndex);
-                    }
+                    if (it != selectedIndices.end() && (mods & GLFW_MOD_SHIFT)) selectedIndices.erase(it);
+                    else if (it == selectedIndices.end()) selectedIndices.push_back(hitIndex);
                 }
             }
 
@@ -191,7 +199,6 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 
 void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
     currentMouseX = xpos; currentMouseY = ypos;
-
     if (ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantCaptureMouse) {
         if (!cam.leftMouse && !cam.rightMouse && !cam.middleMouse) return;
     }
@@ -204,7 +211,6 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
         double dist = std::sqrt(std::pow(xpos - mousePressX, 2) + std::pow(ypos - mousePressY, 2));
         if (dist > DRAG_THRESHOLD) isMouseDragging = true;
     }
-
     if (cam.leftMouse && isMouseDragging && !isDraggingGizmo) isBoxSelecting = true;
 
     if (cam.middleMouse || (cam.rightMouse && glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)) {
@@ -213,58 +219,84 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
          cam.target = cam.target - (b.right * dx * s) + (b.up * dy * s);
          return; 
     }
-    if (cam.rightMouse && isMouseDragging) { 
-        cam.theta -= dx * 0.005f; cam.phi -= dy * 0.005f; 
-    }
+    if (cam.rightMouse && isMouseDragging) { cam.theta -= dx * 0.005f; cam.phi -= dy * 0.005f; }
 
     if (cam.leftMouse && isDraggingGizmo && !selectedIndices.empty()) {
         CameraBasis b = getCameraBasis();
-        vec3 pivot = getSelectionCenter(); 
         
         if (currentMode == MODE_MOVE) {
-            float dist = length(b.pos - pivot);
-            float speed = dist * 0.002f; 
-            vec3 moveVector = {0,0,0};
+            float pivotDist = length(b.pos - getSelectionCenter());
+            float speed = pivotDist * 0.002f; 
+            vec3 moveDeltaWorld = {0,0,0};
 
             if (currentGizmoAxis == AXIS_CENTER) {
-                moveVector = (b.right * dx * speed) + (b.up * (-dy) * speed);
+                moveDeltaWorld = (b.right * dx * speed) + (b.up * (-dy) * speed);
             } else {
                 vec3 axis = {0,0,0};
                 if (currentGizmoAxis == AXIS_X) axis = {1,0,0}; 
                 if (currentGizmoAxis == AXIS_Y) axis = {0,1,0}; 
                 if (currentGizmoAxis == AXIS_Z) axis = {0,0,1};
-                float delta = getMouseDeltaOnAxis(axis, dx, dy);
-                moveVector = axis * delta * speed;
+                float d = getMouseDeltaOnAxis(axis, dx, dy);
+                moveDeltaWorld = axis * d * speed;
             }
             
             for(int idx : selectedIndices) {
-                sceneObjects[idx].position.x += moveVector.x;
-                sceneObjects[idx].position.y += moveVector.y;
-                sceneObjects[idx].position.z += moveVector.z;
+                if(idx < sceneGraph.size()) {
+                    vec3 localDelta = moveDeltaWorld;
+                    
+                    int parentIdx = sceneGraph[idx].parent;
+                    if (parentIdx != -1) {
+                        mat4 pMat = calculateWorldMatrix(parentIdx);
+                        
+                        // ИСПРАВЛЕНИЕ: Стабильный расчет локальной дельты через матрицу
+                        // Извлекаем столбцы (Rotation * Scale)
+                        vec3 c0 = { pMat.m[0], pMat.m[1], pMat.m[2] };
+                        vec3 c1 = { pMat.m[4], pMat.m[5], pMat.m[6] };
+                        vec3 c2 = { pMat.m[8], pMat.m[9], pMat.m[10] };
+                        
+                        // Длина столбцов = Scale
+                        float sx = length(c0);
+                        float sy = length(c1);
+                        float sz = length(c2);
+                        
+                        // Нормализуем для получения чистого вращения
+                        if(sx > 0.0001f) c0 = c0 / sx;
+                        if(sy > 0.0001f) c1 = c1 / sy;
+                        if(sz > 0.0001f) c2 = c2 / sz;
+                        
+                        // Умножаем дельту на транспонированную (инвертированную) матрицу вращения
+                        // LocalX = Dot(WorldDelta, ParentRight)
+                        vec3 rotDelta;
+                        rotDelta.x = dot(c0, moveDeltaWorld);
+                        rotDelta.y = dot(c1, moveDeltaWorld);
+                        rotDelta.z = dot(c2, moveDeltaWorld);
+                        
+                        // Делим на скейл родителя
+                        if(sx > 0.0001f) localDelta.x = rotDelta.x / sx;
+                        if(sy > 0.0001f) localDelta.y = rotDelta.y / sy;
+                        if(sz > 0.0001f) localDelta.z = rotDelta.z / sz;
+                    }
+
+                    sceneGraph[idx].localPosition += localDelta;
+                }
             }
         }
         else if (currentMode == MODE_ROTATE) {
-            float delta = (dx + dy) * 0.01f;
             vec3 axis = {0,0,0};
             if (currentGizmoAxis == AXIS_X) axis = {1,0,0};
             if (currentGizmoAxis == AXIS_Y) axis = {0,1,0};
             if (currentGizmoAxis == AXIS_Z) axis = {0,0,1};
 
+            vec3 tangent = normalize(cross(b.fwd, axis));
+            if (length(tangent) < 0.1f) tangent = b.right;
+            float delta = getMouseDeltaOnAxis(tangent, dx, dy) * 0.02f;
+
             for(int idx : selectedIndices) {
-                vec3 currentPos = {sceneObjects[idx].position.x, sceneObjects[idx].position.y, sceneObjects[idx].position.z};
-                vec3 relPos = currentPos - pivot;
-                vec3 rotatedRel = rotateVector(relPos, axis, delta);
-                vec3 newPos = pivot + rotatedRel;
-                sceneObjects[idx].position.x = newPos.x;
-                sceneObjects[idx].position.y = newPos.y;
-                sceneObjects[idx].position.z = newPos.z;
-
-                if (currentGizmoAxis == AXIS_X) sceneObjects[idx].rotationEuler.x += delta;
-                if (currentGizmoAxis == AXIS_Y) sceneObjects[idx].rotationEuler.y += delta;
-                if (currentGizmoAxis == AXIS_Z) sceneObjects[idx].rotationEuler.z += delta;
-
-                vec3 r = {sceneObjects[idx].rotationEuler.x, sceneObjects[idx].rotationEuler.y, sceneObjects[idx].rotationEuler.z};
-                sceneObjects[idx].invRotation = createInverseRotationMatrix4x4(r);
+                if(idx < sceneGraph.size()) {
+                    if (currentGizmoAxis == AXIS_X) sceneGraph[idx].localRotation.x += delta;
+                    if (currentGizmoAxis == AXIS_Y) sceneGraph[idx].localRotation.y += delta;
+                    if (currentGizmoAxis == AXIS_Z) sceneGraph[idx].localRotation.z += delta;
+                }
             }
         }
         else if (currentMode == MODE_SCALE) {
@@ -282,38 +314,22 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
             }
 
             for(int idx : selectedIndices) {
-                float s = 1.0f + deltaS;
-                if(selectedIndices.size() > 1) {
-                    vec3 currentPos = {sceneObjects[idx].position.x, sceneObjects[idx].position.y, sceneObjects[idx].position.z};
-                    vec3 relPos = currentPos - pivot;
-                    vec3 newRel = relPos; 
-                    if (currentGizmoAxis == AXIS_CENTER) newRel = relPos * s;
-                    else {
-                        newRel.x += relPos.x * axis.x * deltaS;
-                        newRel.y += relPos.y * axis.y * deltaS;
-                        newRel.z += relPos.z * axis.z * deltaS;
+                if(idx < sceneGraph.size()) {
+                    if (currentGizmoAxis == AXIS_CENTER) {
+                        float s = 1.0f + deltaS;
+                        sceneGraph[idx].localScale.x *= s; 
+                        sceneGraph[idx].localScale.y *= s; 
+                        sceneGraph[idx].localScale.z *= s;
+                    } else {
+                        sceneGraph[idx].localScale.x += axis.x * deltaS;
+                        sceneGraph[idx].localScale.y += axis.y * deltaS;
+                        sceneGraph[idx].localScale.z += axis.z * deltaS;
                     }
-                    vec3 newPos = pivot + newRel;
-                    sceneObjects[idx].position.x = newPos.x;
-                    sceneObjects[idx].position.y = newPos.y;
-                    sceneObjects[idx].position.z = newPos.z;
+                    auto fixZero = [](float& val) { if (std::abs(val) < 0.001f) val = (val >= 0) ? 0.001f : -0.001f; };
+                    fixZero(sceneGraph[idx].localScale.x);
+                    fixZero(sceneGraph[idx].localScale.y);
+                    fixZero(sceneGraph[idx].localScale.z);
                 }
-                if (currentGizmoAxis == AXIS_CENTER) {
-                    sceneObjects[idx].scale.x *= s; sceneObjects[idx].scale.y *= s; sceneObjects[idx].scale.z *= s;
-                } else {
-                    sceneObjects[idx].scale.x += axis.x * deltaS;
-                    sceneObjects[idx].scale.y += axis.y * deltaS;
-                    sceneObjects[idx].scale.z += axis.z * deltaS;
-                }
-                auto fixZero = [](float& val) {
-                    if (std::abs(val) < 0.001f) {
-                        val = (val >= 0) ? 0.001f : -0.001f;
-                    }
-                };
-
-                fixZero(sceneObjects[idx].scale.x);
-                fixZero(sceneObjects[idx].scale.y);
-                fixZero(sceneObjects[idx].scale.z);
             }
         }
     }
@@ -327,103 +343,55 @@ void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
 
 void processInput(GLFWwindow* window, float deltaTime) {
     if (ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantCaptureKeyboard) return;
-
     if (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS) currentMode = MODE_MOVE;
     if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS) currentMode = MODE_ROTATE;
     if (glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS) currentMode = MODE_SCALE;
     
-    if (glfwGetKey(window, GLFW_KEY_KP_DECIMAL) == GLFW_PRESS && !selectedIndices.empty()) {
-        cam.target = getSelectionCenter();
-    }
-
+    if (glfwGetKey(window, GLFW_KEY_KP_DECIMAL) == GLFW_PRESS && !selectedIndices.empty()) cam.target = getSelectionCenter();
     bool isCtrl = (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS);
     
-    // --- UNDO (Ctrl + Z) with Repeat ---
     static float undoTimer = 0.0f;
     if (glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS && isCtrl) {
-        if (undoTimer <= 0.0f) {
-            performUndo();
-            undoTimer = 0.15f; // Delay between repeats
-        } else {
-            undoTimer -= deltaTime;
-        }
-    } else {
-        undoTimer = 0.0f; // Reset timer on release
-    }
+        if (undoTimer <= 0.0f) { performUndo(); undoTimer = 0.15f; } else undoTimer -= deltaTime;
+    } else undoTimer = 0.0f;
 
-    // --- DELETE with Repeat ---
     static float delTimer = 0.0f;
     if (glfwGetKey(window, GLFW_KEY_DELETE) == GLFW_PRESS) {
-        if (delTimer <= 0.0f) {
-            deleteSelectedObject();
-            delTimer = 0.2f; 
-        } else {
-            delTimer -= deltaTime;
-        }
-    } else {
-        delTimer = 0.0f;
-    }
+        if (delTimer <= 0.0f) { deleteSelectedObject(); delTimer = 0.2f; } else delTimer -= deltaTime;
+    } else delTimer = 0.0f;
     
-    // --- COPY (Ctrl + C) ---
     static float copyTimer = 0.0f;
     if (glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS && isCtrl) {
         if (copyTimer <= 0.0f && !selectedIndices.empty()) {
-            clipboard.clear();
-            for (int idx : selectedIndices) {
-                if (idx < sceneObjects.size()) clipboard.push_back(sceneObjects[idx]);
-            }
-            std::string name = (clipboard.size() == 1) ? "Object" : std::to_string(clipboard.size()) + " Objects";
-            showToast("Copied " + name);
-            copyTimer = 0.3f; // Slower repeat for copy
-        } else if (copyTimer > 0.0f) {
-            copyTimer -= deltaTime;
-        }
-    } else {
-        copyTimer = 0.0f;
-    }
+            clipboardNodes.clear();
+            for (int idx : selectedIndices) if (idx < sceneGraph.size()) clipboardNodes.push_back(sceneGraph[idx]);
+            showToast("Copied"); copyTimer = 0.3f; 
+        } else copyTimer -= deltaTime;
+    } else copyTimer = 0.0f;
     
-    // --- PASTE (Ctrl + V) with Repeat ---
     static float pasteTimer = 0.0f;
     if (glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS && isCtrl) {
-        if (pasteTimer <= 0.0f && !clipboard.empty()) {
-            saveUndo(); 
-            selectedIndices.clear();
-            for (const auto& obj : clipboard) {
-                if (sceneObjects.size() >= MAX_OBJECTS) break;
-                ObjectData newObj = obj;
-                newObj.position.x += 0.5f; 
-                newObj.position.z += 0.5f;
-                sceneObjects.push_back(newObj);
-                selectedIndices.push_back((int)sceneObjects.size() - 1);
+        if (pasteTimer <= 0.0f && !clipboardNodes.empty()) {
+            saveUndo(); selectedIndices.clear();
+            for (const auto& node : clipboardNodes) {
+                if (sceneGraph.size() >= MAX_OBJECTS) break;
+                SceneNode newNode = node; newNode.name += "_Paste"; newNode.localPosition.x += 1.0f; newNode.parent = -1; newNode.children.clear();
+                sceneGraph.push_back(newNode); selectedIndices.push_back((int)sceneGraph.size() - 1);
             }
-            showToast("Pasted " + std::to_string(clipboard.size()) + " Objects");
-            pasteTimer = 0.2f;
-        } else {
-            pasteTimer -= deltaTime;
-        }
-    } else {
-        pasteTimer = 0.0f;
-    }
+            showToast("Pasted"); pasteTimer = 0.2f;
+        } else pasteTimer -= deltaTime;
+    } else pasteTimer = 0.0f;
     
-    // --- DUPLICATE (Alt + D) ---
     static float dupTimer = 0.0f;
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS && glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS) {
-        if (dupTimer <= 0.0f && !selectedIndices.empty()) {
-            duplicateSelectedObject();
-            dupTimer = 0.25f;
-        } else {
-            dupTimer -= deltaTime;
-        }
-    } else {
-        dupTimer = 0.0f;
-    }
+        if (dupTimer <= 0.0f && !selectedIndices.empty()) { duplicateSelectedObject(); dupTimer = 0.25f; } else dupTimer -= deltaTime;
+    } else dupTimer = 0.0f;
 
     float speed = 5.0f * deltaTime;
     if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) speed *= 3.0f;
     CameraBasis b = getCameraBasis();
     vec3 forward = normalize(vec3{b.fwd.x, 0.0f, b.fwd.z});
     vec3 right   = normalize(vec3{b.right.x, 0.0f, b.right.z});
-    
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) cam.target += forward * speed;
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) cam.target -= forward * speed;
     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) cam.target -= right * speed;
