@@ -29,6 +29,17 @@ struct ObjectData {
     vec4 rotationEuler; 
 };
 
+struct SceneNode {
+    std::string name;
+    vec3 localPosition = {0, 0, 0};
+    vec3 localRotation = {0, 0, 0};
+    vec3 localScale    = {1, 1, 1};
+    ObjectData gpuData;
+    int parent = -1;
+    std::vector<int> children;
+    bool isOpen = true;
+};
+
 struct NosHeader {
     char magic[4];           
     uint32_t version;        
@@ -108,17 +119,17 @@ extern EditorMode currentMode;
 extern GizmoAxis currentGizmoAxis;
 
 extern CameraState cam;
-extern std::vector<ObjectData> sceneObjects;
+// sceneObjects УДАЛЕН - используем только sceneGraph
+extern std::vector<SceneNode> sceneGraph; 
 extern std::vector<int> selectedIndices;
-extern std::vector<ObjectData> clipboard;
+extern std::vector<SceneNode> clipboardNodes; // Изменено с ObjectData на SceneNode
+extern std::vector<ObjectData> gpuObjectCache;
 extern Notification toast;
 extern std::string currentLoadedFile;
 extern NosHeader lastLoadedHeader;
 
-// --- Global Variable for Logo Texture ID ---
 extern void* g_AppLogoID; 
 
-// --- Helper Declarations ---
 void showToast(std::string text);
 CameraBasis getCameraBasis();
 bool projectWorldToScreen(vec3 worldPos, float width, float height, vec2& outScreen);
