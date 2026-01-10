@@ -16,8 +16,7 @@
 extern void* g_AppLogoID; 
 static bool showAboutWindow = false; 
 static bool isFirstRunCheckDone = false; 
-static int renamingNodeIdx = -1; // Индекс узла, который мы сейчас переименовываем в иерархии
-
+static int renamingNodeIdx = -1; 
 
 struct ChangelogEntry {
     std::string version;
@@ -28,17 +27,10 @@ struct ChangelogEntry {
 };
 
 const std::vector<ChangelogEntry> appChangelog = {
-    // Предыдущая версия с исправлениями
-ChangelogEntry("v1.4 - Fixes", "08.01.2026", { 
-    "Fixed Transform Gizmos", 
-    "Fixed Copy/Paste", 
-    "Removed deprecated object list" 
-}),
-
-// Новая версия с функционалом
-ChangelogEntry("v1.5 - Scene Hierarchy", "09.01.2026", { 
-    "Implemented Scene Graph", 
-    "Added object naming in the hierarchy" 
+    ChangelogEntry("v1.5 - Hierarchy Fix", "10.01.2026", { 
+    "Added Drag & Drop grouping", 
+    "Fixed double-transform on parent/child selection", 
+    "Added 'Unparent' area" 
 })};
 
 void DrawSceneNode(int nodeIdx); 
@@ -65,7 +57,7 @@ void renderAboutWindow() {
         ImGui::PopStyleColor();
         ImGui::SetWindowFontScale(1.0f); 
         ImGui::Dummy(ImVec2(0, 10));
-        TextCentered("Fix Edition");
+        TextCentered("Hierarchy Edition");
         
         float buttonW = 200;
         float buttonH = 40;
@@ -217,9 +209,24 @@ void renderUI(GLFWwindow* window) {
             ImGui::TextDisabled("HIERARCHY"); 
             ImGui::Separator();
             ImGui::BeginChild("HierarchyScroll", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+            
+            // Рендер корневых узлов
             for (int i = 0; i < (int)sceneGraph.size(); i++) {
                 if (sceneGraph[i].parent == -1) DrawSceneNode(i);
             }
+
+            // Зона для сброса в корень (Drop to Unparent)
+            ImGui::Dummy(ImVec2(ImGui::GetContentRegionAvail().x, 30.0f));
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_NODE")) {
+                    int payloadIdx = *(const int*)payload->Data;
+                    reparent(payloadIdx, -1); // Сброс родителя (стать сиротой)
+                }
+                ImGui::EndDragDropTarget();
+            }
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 30.0f);
+            ImGui::TextDisabled("(Drop here to unparent)");
+
             ImGui::EndChild();
         }
         ImGui::End();
@@ -233,7 +240,7 @@ void renderUI(GLFWwindow* window) {
                     SceneNode& node = sceneGraph[activeIdx];
                     char nameBuf[128];
                     strncpy(nameBuf, node.name.c_str(), sizeof(nameBuf));
-                    ImGui::PushItemWidth(-1); // Растянуть на всю ширину
+                    ImGui::PushItemWidth(-1); 
                     if (ImGui::InputText("##ObjectName", nameBuf, sizeof(nameBuf))) {
                         node.name = nameBuf;
                     }
@@ -274,13 +281,12 @@ void renderUI(GLFWwindow* window) {
 
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     int w, h; glfwGetFramebufferSize(window, &w, &h);
-    // Рисуем рамки выделения
+    
     for (int idx : selectedIndices) {
         if (idx >= sceneGraph.size()) continue;
         const auto& od = sceneGraph[idx].gpuData;
         vec3 pos = {od.position.x, od.position.y, od.position.z};
         float size = od.params.x;
-        // Для рамки используем мировой масштаб (из gpuData), так как он там уже посчитан
         vec3 scl = {od.scale.x, od.scale.y, od.scale.z}; 
         
         float sx = size * scl.x; 
@@ -290,7 +296,6 @@ void renderUI(GLFWwindow* window) {
         vec3 corners[8];
         for(int i=0; i<8; i++) { 
             vec3 offset = { (i&1?sx:-sx), (i&2?sy:-sy), (i&4?sz:-sz) }; 
-            // Тут упрощенно без вращения рамки, чтобы не усложнять. Для точной рамки нужно умножать offset на матрицу вращения
             corners[i] = pos + offset; 
         }
         ImVec2 minS = {10000, 10000}, maxS = {-10000, -10000}; bool visible = false;
@@ -327,23 +332,36 @@ void DrawSceneNode(int nodeIdx) {
     for (int sel : selectedIndices) { if (sel == nodeIdx) { isSelected = true; break; } }
     if (isSelected) flags |= ImGuiTreeNodeFlags_Selected;
 
-    // Если этот узел сейчас переименовывается
     if (renamingNodeIdx == nodeIdx) {
         char buf[128];
         strncpy(buf, node.name.c_str(), sizeof(buf));
-        ImGui::SetKeyboardFocusHere(); // Автофокус на поле ввода
+        ImGui::SetKeyboardFocusHere(); 
         if (ImGui::InputText("##rename", buf, sizeof(buf), ImGuiInputTextFlags_EnterReturnsTrue)) {
             node.name = buf;
-            renamingNodeIdx = -1; // Завершить переименование
+            renamingNodeIdx = -1; 
         }
         if (!ImGui::IsItemActive() && ImGui::IsMouseClicked(0)) {
-            renamingNodeIdx = -1; // Сброс, если кликнули мимо
+            renamingNodeIdx = -1; 
         }
     } else {
-        // Обычный вывод узла
         bool nodeOpen = ImGui::TreeNodeEx((void*)(intptr_t)nodeIdx, flags, "%s", node.name.c_str());
 
-        // Двойной клик для начала переименования
+        // --- DRAG AND DROP SOURCE ---
+        if (ImGui::BeginDragDropSource()) {
+            ImGui::SetDragDropPayload("SCENE_NODE", &nodeIdx, sizeof(int));
+            ImGui::Text("Move %s", node.name.c_str());
+            ImGui::EndDragDropSource();
+        }
+
+        // --- DRAG AND DROP TARGET ---
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCENE_NODE")) {
+                int payloadIdx = *(const int*)payload->Data;
+                reparent(payloadIdx, nodeIdx);
+            }
+            ImGui::EndDragDropTarget();
+        }
+
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
             renamingNodeIdx = nodeIdx;
         }
@@ -353,14 +371,12 @@ void DrawSceneNode(int nodeIdx) {
             selectedIndices.push_back(nodeIdx);
         }
 
-        // Контекстное меню для конкретного узла
         if (ImGui::BeginPopupContextItem()) {
             if (ImGui::MenuItem("Rename")) { renamingNodeIdx = nodeIdx; }
-            if (ImGui::MenuItem("Delete")) { /* логика удаления */ }
+            if (ImGui::MenuItem("Delete")) { deleteSelectedObject(); }
             ImGui::EndPopup();
         }
 
-        // ... дальше ваш код с Drag & Drop ...
         if (nodeOpen) {
             for (int childIdx : node.children) DrawSceneNode(childIdx);
             ImGui::TreePop();

@@ -4,17 +4,14 @@
 #include <algorithm>
 #include <numeric>
 
-// --- Matrix Helpers for Scene ---
 mat4 calculateWorldMatrix(int nodeIdx) {
     if (nodeIdx < 0 || nodeIdx >= (int)sceneGraph.size()) return identityMatrix();
     
-    // Рекурсия для получения матрицы родителя
     mat4 parentMat = identityMatrix();
     if (sceneGraph[nodeIdx].parent != -1) {
         parentMat = calculateWorldMatrix(sceneGraph[nodeIdx].parent);
     }
 
-    // Локальная матрица
     mat4 localMat = composeMatrix(
         sceneGraph[nodeIdx].localPosition, 
         sceneGraph[nodeIdx].localRotation, 
@@ -54,7 +51,6 @@ vec3 getSelectionCenter() {
     int count = 0;
     for (int idx : selectedIndices) {
         if(idx < sceneGraph.size()) {
-            // Берем уже посчитанную мировую позицию из GPU Data
             center.x += sceneGraph[idx].gpuData.position.x;
             center.y += sceneGraph[idx].gpuData.position.y;
             center.z += sceneGraph[idx].gpuData.position.z;
@@ -69,7 +65,7 @@ void reparent(int childIdx, int newParentIdx) {
     if (childIdx == newParentIdx) return;
     if (childIdx < 0 || childIdx >= (int)sceneGraph.size()) return;
 
-    // Проверка циклов
+    // Проверка циклов (нельзя сделать родителя своим ребенком)
     int checkIdx = newParentIdx;
     while (checkIdx != -1) {
         if (checkIdx == childIdx) return; 
@@ -81,7 +77,7 @@ void reparent(int childIdx, int newParentIdx) {
     // 1. Сохраняем текущее мировое состояние
     mat4 worldMat = calculateWorldMatrix(childIdx);
     
-    // 2. Отцепляем от старого
+    // 2. Отцепляем от старого родителя
     if (child.parent != -1) {
         auto& oldChildren = sceneGraph[child.parent].children;
         oldChildren.erase(std::remove(oldChildren.begin(), oldChildren.end(), childIdx), oldChildren.end());
@@ -105,21 +101,16 @@ void reparent(int childIdx, int newParentIdx) {
     }
 }
 
-// Ключевая функция обновления
 void updateHierarchy(int nodeIdx, mat4 parentWorldMat) {
     if (nodeIdx >= sceneGraph.size()) return;
     SceneNode& node = sceneGraph[nodeIdx];
 
-    // 1. Считаем мировую матрицу: P * L
     mat4 localMat = composeMatrix(node.localPosition, node.localRotation, node.localScale);
     mat4 worldMat = multiplyMatrices(parentWorldMat, localMat);
 
-    // 2. Разбираем мировую матрицу на компоненты для шейдера
-    // Шейдер ничего не знает про родителей, ему нужны честные координаты в мире.
     vec3 wPos, wRot, wScale;
     decomposeMatrix(worldMat, wPos, wRot, wScale);
 
-    // 3. Записываем в GPU структуру
     node.gpuData.position.x = wPos.x;
     node.gpuData.position.y = wPos.y;
     node.gpuData.position.z = wPos.z;
@@ -128,16 +119,12 @@ void updateHierarchy(int nodeIdx, mat4 parentWorldMat) {
     node.gpuData.scale.y = wScale.y;
     node.gpuData.scale.z = wScale.z;
 
-    // ВАЖНО: wRot содержит вращение объекта + вращение родителя.
-    // Это заставит объект повернуться правильно.
     node.gpuData.invRotation = createInverseRotationMatrix4x4(wRot);
     
-    // Сохраняем для рейкастинга (выделения мышкой)
     node.gpuData.rotationEuler.x = wRot.x;
     node.gpuData.rotationEuler.y = wRot.y;
     node.gpuData.rotationEuler.z = wRot.z;
 
-    // 4. Идем к детям, передавая им нашу НОВУЮ мировую матрицу
     for (int childIdx : node.children) {
         updateHierarchy(childIdx, worldMat);
     }
@@ -159,7 +146,7 @@ void deleteSelectedObject() {
                 if(child < sceneGraph.size()) sceneGraph[child].parent = -1;
             }
             sceneGraph.erase(sceneGraph.begin() + idx);
-            // Сдвиг индексов (очень дорого, но для примера сойдет)
+            // Сдвиг индексов 
             for(auto& node : sceneGraph) {
                 if(node.parent > idx) node.parent--;
                 for(int& c : node.children) if(c > idx) c--;
@@ -179,7 +166,7 @@ void duplicateSelectedObject() {
         SceneNode newNode = sceneGraph[idx];
         newNode.name += "_Copy";
         newNode.localPosition.x += 1.0f;
-        newNode.parent = -1; // Копия падает в корень
+        newNode.parent = -1; 
         newNode.children.clear(); 
         sceneGraph.push_back(newNode);
         newIndices.push_back(currentSize++);
