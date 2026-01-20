@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <string>
+#define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <cmath>
 
@@ -18,6 +19,27 @@ struct mat4 { float m[16]; };
 
 struct Ray { vec3 origin; vec3 dir; };
 struct CameraBasis { vec3 pos, fwd, right, up; };
+
+// --- Polygon Types ---
+struct Vertex {
+    vec3 pos;
+    vec3 normal;
+    vec2 uv;
+    vec4 color;
+};
+
+struct MeshBuffer {
+    VkBuffer buffer;
+    VkDeviceMemory memory;
+    uint32_t count;
+};
+
+struct MeshData {
+    MeshBuffer vertexBuffer;
+    MeshBuffer indexBuffer;
+    int materialId = -1;
+    bool isLoaded = false;
+};
 
 // --- Scene Structs ---
 struct ObjectData {
@@ -38,6 +60,7 @@ struct SceneNode {
     int parent = -1;
     std::vector<int> children;
     bool isOpen = true;
+    int meshIdx = -1; // -1 means SDF-only or container
 };
 
 struct NosHeader {
@@ -122,8 +145,9 @@ extern CameraState cam;
 // sceneObjects УДАЛЕН - используем только sceneGraph
 extern std::vector<SceneNode> sceneGraph; 
 extern std::vector<int> selectedIndices;
-extern std::vector<SceneNode> clipboardNodes; // Изменено с ObjectData на SceneNode
+extern std::vector<SceneNode> clipboardNodes; 
 extern std::vector<ObjectData> gpuObjectCache;
+extern std::vector<MeshData> meshCache;
 extern Notification toast;
 extern std::string currentLoadedFile;
 extern NosHeader lastLoadedHeader;
