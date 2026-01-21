@@ -92,6 +92,7 @@ struct PushConstants {
     float uiMinX, uiMinY, uiMaxX, uiMaxY; 
     int shadingMode; 
     float gizmoPos[3]; 
+    float focalLength; // FOV sync
 };
 
 struct Notification {

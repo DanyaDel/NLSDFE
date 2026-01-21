@@ -8,9 +8,11 @@ layout(location = 3) in vec4 fragColor;
 layout(location = 0) out vec4 outColor;
 
 layout(push_constant) uniform MeshPushConstants {
+    mat4 viewProj;
     mat4 model;
     vec4 color;
     vec4 params; // x=metallic, y=roughness, z=ao, w=unused
+    vec4 camPos;
 } pc;
 
 vec3 lightDir = normalize(vec3(0.5, 0.8, -0.5));
@@ -18,7 +20,7 @@ vec3 lightDir = normalize(vec3(0.5, 0.8, -0.5));
 void main() {
     vec3 N = normalize(fragNormal);
     vec3 L = lightDir;
-    vec3 V = normalize(-fragPos); // Assuming view space or simple world space setup
+    vec3 V = normalize(pc.camPos.xyz - fragPos); 
     
     // Simple Lambertian + Specular (Blinn-Phong) to match SDF logic roughly
     float diff = max(dot(N, L), 0.0);

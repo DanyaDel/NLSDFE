@@ -1,13 +1,11 @@
 #version 450
 
-layout(binding = 0) uniform UniformBufferObject {
-    mat4 view;
-    mat4 proj;
-} ubo;
-
 layout(push_constant) uniform MeshPushConstants {
+    mat4 viewProj;
     mat4 model;
     vec4 color;
+    vec4 params;
+    vec4 camPos;
 } pc;
 
 layout(location = 0) in vec3 inPosition;
@@ -21,8 +19,9 @@ layout(location = 2) out vec2 fragTexCoord;
 layout(location = 3) out vec4 fragColor;
 
 void main() {
-    gl_Position = ubo.proj * ubo.view * pc.model * vec4(inPosition, 1.0);
-    fragPos = vec3(pc.model * vec4(inPosition, 1.0));
+    vec4 worldPos = pc.model * vec4(inPosition, 1.0);
+    gl_Position = pc.viewProj * worldPos;
+    fragPos = worldPos.xyz;
     fragNormal = mat3(transpose(inverse(pc.model))) * inNormal;
     fragTexCoord = inTexCoord;
     fragColor = inColor * pc.color;

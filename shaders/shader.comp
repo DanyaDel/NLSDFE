@@ -2,6 +2,7 @@
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(binding = 0) uniform writeonly image2D resultImage;
+layout(binding = 2) uniform writeonly image2D sdfDepthImage;
 
 layout(push_constant) uniform PushConsts {
     mat4 camToWorld;
@@ -14,6 +15,7 @@ layout(push_constant) uniform PushConsts {
     float uiMinX, uiMinY, uiMaxX, uiMaxY;
     int shadingMode; // 0=Wire, 1=Solid, 2=Material, 3=Rendered
     vec3 gizmoPos;   // Центр выделения (передается из CPU)
+    float focalLength; // FOV sync
 } pc;
 
 struct Object {
@@ -88,6 +90,8 @@ vec2 mapScene(vec3 p) {
         vec3 absScl = abs(rawScl);
         float size = scene.objects[i].params.x;
         int type = int(scene.objects[i].position.w);
+        if (type < 0) continue; // Skip meshes in SDF raymarching
+
         int op = int(scene.objects[i].params.y);
         float smoothK = max(scene.objects[i].params.z, 0.001);
 
@@ -282,7 +286,7 @@ void main() {
     uv.y = -uv.y;
 
     vec3 ro = pc.camToWorld[3].xyz;
-    vec3 rd = mat3(pc.camToWorld) * normalize(vec3(uv, -1.8));
+    vec3 rd = mat3(pc.camToWorld) * normalize(vec3(uv, -pc.focalLength));
 
     // Авто-оптимизация: Если двигаем гизмо, принудительно включаем режим Solid (быстрее)
     int effMode = pc.shadingMode;
@@ -290,6 +294,7 @@ void main() {
 
     vec3 finalColor = vec3(0.0);
     vec3 throughput = vec3(1.0);
+    float firstHitT = -1.0;
     
     int maxBounces = (effMode == 3) ? 2 : 1; 
     if (effMode == 0) maxBounces = 1;
@@ -306,7 +311,11 @@ void main() {
             vec3 p = ro + rd * t;
             vec2 res = mapScene(p);
             float d = res.x;
-            if (abs(d) < (pixelRadius * t)) { hit = true; objID = res.y; break; }
+            if (abs(d) < (pixelRadius * t)) { 
+                hit = true; objID = res.y; 
+                if(bounce == 0) firstHitT = t;
+                break; 
+            }
             if (t > tMax) break;
             t += d;
         }
@@ -405,7 +414,7 @@ void main() {
     if (pc.selectedIndex >= 0) {
         vec3 center = pc.gizmoPos; // Берем центр, рассчитанный в main.cpp
         vec3 gRo = pc.camToWorld[3].xyz;
-        vec3 gRd = mat3(pc.camToWorld) * normalize(vec3(uv, -1.8));
+        vec3 gRd = mat3(pc.camToWorld) * normalize(vec3(uv, -pc.focalLength));
         float centerDist = length(center - gRo);
         
         // Начинаем луч от 0.1, чтобы рисовать поверх геометрии сцены
@@ -450,4 +459,12 @@ void main() {
     }
 
     imageStore(resultImage, texelCoord, vec4(finalColor, 1.0));
+
+    float depthOut = 1.0;
+    if (firstHitT > 0.0) {
+        float nearP = 0.1;
+        float farP = 200.0;
+        depthOut = farP / (farP - nearP) + (farP * nearP) / (firstHitT * (nearP - farP));
+    }
+    imageStore(sdfDepthImage, texelCoord, vec4(depthOut, 0.0, 0.0, 0.0));
 }
