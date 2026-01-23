@@ -168,6 +168,10 @@ void renderUI(GLFWwindow* window) {
                 };
                 if (ImGui::MenuItem("Sphere")) create("Sphere", 0);
                 if (ImGui::MenuItem("Cube")) create("Cube", 1);
+                if (ImGui::MenuItem("Mesh (.obj)")) {
+                    std::string path = FileDialogs::OpenFile(window, "OBJ Model (*.obj)\0*.obj\0All Files (*.*)\0*.*\0");
+                    if (!path.empty()) loadMesh(path);
+                }
                 ImGui::EndPopup(); 
             }
             ImGui::SameLine();
@@ -247,12 +251,19 @@ void renderUI(GLFWwindow* window) {
                     ImGui::PopItemWidth();
                     ImGui::Spacing();
                     ImGui::Separator();
-                    if (ImGui::CollapsingHeader("Geometry", ImGuiTreeNodeFlags_DefaultOpen)) {
-                        const char* shapes[] = { "Sphere", "Box" };
-                        int type = (int)node.gpuData.position.w;
-                        if (ImGui::Combo("Shape", &type, shapes, 2)) node.gpuData.position.w = (float)type;
-                        ImGui::DragFloat("Radius/Size", &node.gpuData.params.x, 0.05f);
-                        ImGui::DragFloat("Smoothness", &node.gpuData.params.z, 0.01f, 0.0f, 2.0f);
+                    if (node.meshIdx == -1) {
+                        if (ImGui::CollapsingHeader("Geometry", ImGuiTreeNodeFlags_DefaultOpen)) {
+                            const char* shapes[] = { "Sphere", "Box" };
+                            int type = (int)node.gpuData.position.w;
+                            if (ImGui::Combo("Shape", &type, shapes, 2)) node.gpuData.position.w = (float)type;
+                            ImGui::DragFloat("Radius/Size", &node.gpuData.params.x, 0.05f);
+                            ImGui::DragFloat("Smoothness", &node.gpuData.params.z, 0.01f, 0.0f, 2.0f);
+                        }
+                    } else {
+                        if (ImGui::CollapsingHeader("Mesh Info", ImGuiTreeNodeFlags_DefaultOpen)) {
+                            ImGui::Text("Mesh ID: %d", node.meshIdx);
+                            ImGui::Text("File: %s", meshCache[node.meshIdx].isLoaded ? "Loaded" : "Failed");
+                        }
                     }
                     if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
                         ImGui::ColorEdit3("Color", &node.gpuData.color.x);

@@ -4,6 +4,62 @@
 #include <algorithm>
 #include <numeric>
 
+#include <sstream>
+
+OBJModel parseOBJ(const std::string& path) {
+    OBJModel model;
+    std::ifstream file(path);
+    if (!file.is_open()) return model;
+
+    std::vector<vec3> positions;
+    std::vector<vec3> normals;
+    std::vector<vec2> uvs;
+    
+    std::string line;
+    while (std::getline(file, line)) {
+        std::stringstream ss(line);
+        std::string prefix;
+        ss >> prefix;
+
+        if (prefix == "v") {
+            vec3 v; ss >> v.x >> v.y >> v.z;
+            positions.push_back(v);
+        } else if (prefix == "vn") {
+            vec3 n; ss >> n.x >> n.y >> n.z;
+            normals.push_back(n);
+        } else if (prefix == "vt") {
+            vec2 t; ss >> t.x >> t.y;
+            uvs.push_back(t);
+        } else if (prefix == "f") {
+            std::string vertexData;
+            for (int i = 0; i < 3; ++i) {
+                ss >> vertexData;
+                std::replace(vertexData.begin(), vertexData.end(), '/', ' ');
+                std::stringstream vss(vertexData);
+                int vIdx = -1, tIdx = -1, nIdx = -1;
+                vss >> vIdx;
+                if (vertexData.find(' ') != std::string::npos) {
+                    if (line.find("//") != std::string::npos) vss >> nIdx;
+                    else {
+                        vss >> tIdx;
+                        if (vss >> nIdx);
+                    }
+                }
+
+                Vertex v = {};
+                if (vIdx > 0 && vIdx <= (int)positions.size()) v.pos = positions[vIdx - 1];
+                if (nIdx > 0 && nIdx <= (int)normals.size()) v.normal = normals[nIdx - 1];
+                if (tIdx > 0 && tIdx <= (int)uvs.size()) v.uv = uvs[tIdx - 1];
+                v.color = {1, 1, 1, 1};
+
+                model.vertices.push_back(v);
+                model.indices.push_back((uint32_t)model.indices.size());
+            }
+        }
+    }
+    return model;
+}
+
 mat4 calculateWorldMatrix(int nodeIdx) {
     if (nodeIdx < 0 || nodeIdx >= (int)sceneGraph.size()) return identityMatrix();
     

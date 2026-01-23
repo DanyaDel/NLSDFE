@@ -29,3 +29,9 @@ mat4 calculateWorldMatrix(int nodeIdx);
 
 vec3 getSelectionCenter();
 std::vector<char> readFile(const std::string& filename);
+
+struct OBJModel {
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+};
+OBJModel parseOBJ(const std::string& path);

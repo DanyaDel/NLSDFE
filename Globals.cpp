@@ -14,6 +14,7 @@ std::vector<SceneNode> sceneGraph;
 std::vector<ObjectData> gpuObjectCache;
 std::vector<int> selectedIndices;
 std::vector<SceneNode> clipboardNodes;
+std::vector<MeshData> meshCache;
 Notification toast;
 std::string currentLoadedFile = "Untitled";
 NosHeader lastLoadedHeader = {};

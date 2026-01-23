@@ -50,7 +50,21 @@ if(GLSLC_EXECUTABLE)
     add_custom_command(
         TARGET SDF_Engine PRE_BUILD
         COMMAND ${GLSLC_EXECUTABLE} ${CMAKE_SOURCE_DIR}/shaders/shader.comp -o ${CMAKE_BINARY_DIR}/shader.spv
-        COMMENT "Compiling Compute Shader..."
+        COMMAND ${GLSLC_EXECUTABLE} ${CMAKE_SOURCE_DIR}/shaders/depth_prime.vert -o ${CMAKE_BINARY_DIR}/depth_prime_vert.spv
+        COMMAND ${GLSLC_EXECUTABLE} ${CMAKE_SOURCE_DIR}/shaders/depth_prime.frag -o ${CMAKE_BINARY_DIR}/depth_prime_frag.spv
+        COMMAND ${GLSLC_EXECUTABLE} ${CMAKE_SOURCE_DIR}/shaders/mesh.vert -o ${CMAKE_BINARY_DIR}/mesh_vert.spv
+        COMMAND ${GLSLC_EXECUTABLE} ${CMAKE_SOURCE_DIR}/shaders/mesh.frag -o ${CMAKE_BINARY_DIR}/mesh_frag.spv
+    )
+    add_custom_command(
+        TARGET SDF_Engine POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_BINARY_DIR}/shader.spv
+            ${CMAKE_BINARY_DIR}/depth_prime_vert.spv
+            ${CMAKE_BINARY_DIR}/depth_prime_frag.spv
+            ${CMAKE_BINARY_DIR}/mesh_vert.spv
+            ${CMAKE_BINARY_DIR}/mesh_frag.spv
+            $<TARGET_FILE_DIR:SDF_Engine>
+        COMMENT "Copying shaders to executable directory..."
     )
 else()
     message(WARNING "glslc not found! Compile shader manually.")

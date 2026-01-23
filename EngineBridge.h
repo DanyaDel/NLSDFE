@@ -5,3 +5,4 @@
 // Этот файл нужен скорее для совместимости с CMake списком файлов.
 void saveNos(const std::string& path);
 void loadNos(const std::string& path);
+void loadMesh(const std::string& path);
