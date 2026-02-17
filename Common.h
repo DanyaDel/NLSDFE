@@ -61,6 +61,11 @@ struct SceneNode {
     std::vector<int> children;
     bool isOpen = true;
     int meshIdx = -1; // -1 means SDF-only or container
+    
+    // Optimization flags
+    bool isDirty = true;
+    bool isSelected = false;
+    mat4 worldMatrix; // Cached world matrix
 };
 
 struct NosHeader {
@@ -113,7 +118,7 @@ struct CameraState {
 // --- Enums ---
 enum GameEditorMode { EDITOR_OBJECT, EDITOR_MAP, EDITOR_GAME_BUILD };
 enum EditorMode { MODE_MOVE, MODE_ROTATE, MODE_SCALE };
-enum GizmoAxis { AXIS_NONE, AXIS_X, AXIS_Y, AXIS_Z, AXIS_CENTER };
+enum GizmoAxis { AXIS_NONE, AXIS_X, AXIS_Y, AXIS_Z, AXIS_CENTER, AXIS_XY, AXIS_YZ, AXIS_XZ };
 
 // --- Globals (Defined in Globals.cpp) ---
 extern float guiAlpha;

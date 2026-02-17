@@ -88,7 +88,7 @@ void renderUI(GLFWwindow* window) {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    setupImGuiStyle();
+    // setupImGuiStyle(); // Removed from here, moved to initImGui
     ImGuiIO& io = ImGui::GetIO();
     
     if (!isFirstRunCheckDone) {
@@ -255,9 +255,9 @@ void renderUI(GLFWwindow* window) {
                         if (ImGui::CollapsingHeader("Geometry", ImGuiTreeNodeFlags_DefaultOpen)) {
                             const char* shapes[] = { "Sphere", "Box" };
                             int type = (int)node.gpuData.position.w;
-                            if (ImGui::Combo("Shape", &type, shapes, 2)) node.gpuData.position.w = (float)type;
-                            ImGui::DragFloat("Radius/Size", &node.gpuData.params.x, 0.05f);
-                            ImGui::DragFloat("Smoothness", &node.gpuData.params.z, 0.01f, 0.0f, 2.0f);
+                            if (ImGui::Combo("Shape", &type, shapes, 2)) { node.gpuData.position.w = (float)type; node.isDirty = true; }
+                            if (ImGui::DragFloat("Radius/Size", &node.gpuData.params.x, 0.05f)) node.isDirty = true;
+                            if (ImGui::DragFloat("Smoothness", &node.gpuData.params.z, 0.01f, 0.0f, 2.0f)) node.isDirty = true;
                         }
                     } else {
                         if (ImGui::CollapsingHeader("Mesh Info", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -270,9 +270,9 @@ void renderUI(GLFWwindow* window) {
                         ImGui::SliderFloat("Metallic", &node.gpuData.params.w, 0.0f, 1.0f);
                     }
                     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-                        ImGui::DragFloat3("Pos", &node.localPosition.x, 0.05f);
-                        ImGui::DragFloat3("Rot", &node.localRotation.x, 0.05f); 
-                        ImGui::DragFloat3("Scale", &node.localScale.x, 0.05f);
+                        if (ImGui::DragFloat3("Pos", &node.localPosition.x, 0.05f)) node.isDirty = true;
+                        if (ImGui::DragFloat3("Rot", &node.localRotation.x, 0.05f)) node.isDirty = true; 
+                        if (ImGui::DragFloat3("Scale", &node.localScale.x, 0.05f)) node.isDirty = true;
                     }
                 }
             } else {
@@ -339,9 +339,7 @@ void DrawSceneNode(int nodeIdx) {
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
     if (node.children.empty()) flags |= ImGuiTreeNodeFlags_Leaf;
     
-    bool isSelected = false;
-    for (int sel : selectedIndices) { if (sel == nodeIdx) { isSelected = true; break; } }
-    if (isSelected) flags |= ImGuiTreeNodeFlags_Selected;
+    if (node.isSelected) flags |= ImGuiTreeNodeFlags_Selected;
 
     if (renamingNodeIdx == nodeIdx) {
         char buf[128];
@@ -378,7 +376,11 @@ void DrawSceneNode(int nodeIdx) {
         }
 
         if (ImGui::IsItemClicked()) {
-            if (!ImGui::GetIO().KeyShift) selectedIndices.clear();
+            if (!ImGui::GetIO().KeyShift) {
+                for(int idx : selectedIndices) if(idx < sceneGraph.size()) sceneGraph[idx].isSelected = false;
+                selectedIndices.clear();
+            }
+            node.isSelected = true;
             selectedIndices.push_back(nodeIdx);
         }
 

@@ -338,9 +338,12 @@ private:
     void createSSBO() { createBuffer(sizeof(ObjectData)*MAX_OBJECTS, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, sceneBuffer, sceneBufferMemory); vkMapMemory(device, sceneBufferMemory, 0, sizeof(ObjectData)*MAX_OBJECTS, 0, &sceneBufferMapped); }
     
     void updateSSBO() {
+        bool anyDirty = false;
+        for (const auto& node : sceneGraph) if(node.isDirty) { anyDirty = true; break; }
+        
         gpuObjectCache.clear();
-        mat4 identity; memset(identity.m, 0, sizeof(float)*16); identity.m[0]=1; identity.m[5]=1; identity.m[10]=1; identity.m[15]=1;
-        for (int i = 0; i < sceneGraph.size(); i++) {
+        mat4 identity = identityMatrix();
+        for (int i = 0; i < (int)sceneGraph.size(); i++) {
             if (sceneGraph[i].parent == -1) {
                 updateHierarchy(i, identity);
             }
@@ -422,7 +425,8 @@ private:
         VkDescriptorPoolCreateInfo pool_info = {}; pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO; pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT; pool_info.maxSets = 1000; pool_info.poolSizeCount = 1; pool_info.pPoolSizes = pool_sizes;
         vkCreateDescriptorPool(device, &pool_info, nullptr, &imguiDescriptorPool);
         
-        IMGUI_CHECKVERSION(); ImGui::CreateContext(); setupImGuiStyle();
+        IMGUI_CHECKVERSION(); ImGui::CreateContext(); 
+        setupImGuiStyle(); // Moved here from renderUI
         ImGui_ImplGlfw_InitForVulkan(window, true);
         ImGui_ImplVulkan_InitInfo init_info = {}; init_info.Instance = instance; init_info.PhysicalDevice = physicalDevice; init_info.Device = device; init_info.QueueFamily = 0; init_info.Queue = presentQueue; init_info.DescriptorPool = imguiDescriptorPool; init_info.MinImageCount = 2; init_info.ImageCount = (uint32_t)swapchainImages.size(); init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
         ImGui_ImplVulkan_Init(&init_info, imguiRenderPass);

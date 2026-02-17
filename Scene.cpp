@@ -8,42 +8,38 @@
 
 OBJModel parseOBJ(const std::string& path) {
     OBJModel model;
-    std::ifstream file(path);
-    if (!file.is_open()) return model;
+    FILE* file = fopen(path.c_str(), "r");
+    if (!file) return model;
 
     std::vector<vec3> positions;
     std::vector<vec3> normals;
     std::vector<vec2> uvs;
     
-    std::string line;
-    while (std::getline(file, line)) {
-        std::stringstream ss(line);
-        std::string prefix;
-        ss >> prefix;
-
-        if (prefix == "v") {
-            vec3 v; ss >> v.x >> v.y >> v.z;
+    char lineHeader[128];
+    while (fscanf(file, "%s", lineHeader) != EOF) {
+        if (strcmp(lineHeader, "v") == 0) {
+            vec3 v; fscanf(file, "%f %f %f", &v.x, &v.y, &v.z);
             positions.push_back(v);
-        } else if (prefix == "vn") {
-            vec3 n; ss >> n.x >> n.y >> n.z;
+        } else if (strcmp(lineHeader, "vn") == 0) {
+            vec3 n; fscanf(file, "%f %f %f", &n.x, &n.y, &n.z);
             normals.push_back(n);
-        } else if (prefix == "vt") {
-            vec2 t; ss >> t.x >> t.y;
+        } else if (strcmp(lineHeader, "vt") == 0) {
+            vec2 t; fscanf(file, "%f %f", &t.x, &t.y);
             uvs.push_back(t);
-        } else if (prefix == "f") {
-            std::string vertexData;
+        } else if (strcmp(lineHeader, "f") == 0) {
             for (int i = 0; i < 3; ++i) {
-                ss >> vertexData;
-                std::replace(vertexData.begin(), vertexData.end(), '/', ' ');
-                std::stringstream vss(vertexData);
-                int vIdx = -1, tIdx = -1, nIdx = -1;
-                vss >> vIdx;
-                if (vertexData.find(' ') != std::string::npos) {
-                    if (line.find("//") != std::string::npos) vss >> nIdx;
-                    else {
-                        vss >> tIdx;
-                        if (vss >> nIdx);
-                    }
+                char vertexData[128];
+                fscanf(file, "%s", vertexData);
+                
+                int vIdx = 0, tIdx = 0, nIdx = 0;
+                if (strstr(vertexData, "//")) {
+                    sscanf(vertexData, "%d//%d", &vIdx, &nIdx);
+                } else if (count_chars(vertexData, '/') == 2) {
+                    sscanf(vertexData, "%d/%d/%d", &vIdx, &tIdx, &nIdx);
+                } else if (count_chars(vertexData, '/') == 1) {
+                    sscanf(vertexData, "%d/%d", &vIdx, &tIdx);
+                } else {
+                    sscanf(vertexData, "%d", &vIdx);
                 }
 
                 Vertex v = {};
@@ -57,24 +53,30 @@ OBJModel parseOBJ(const std::string& path) {
             }
         }
     }
+    fclose(file);
     return model;
 }
 
 mat4 calculateWorldMatrix(int nodeIdx) {
     if (nodeIdx < 0 || nodeIdx >= (int)sceneGraph.size()) return identityMatrix();
     
+    SceneNode& node = sceneGraph[nodeIdx];
+    if (!node.isDirty) return node.worldMatrix;
+
     mat4 parentMat = identityMatrix();
-    if (sceneGraph[nodeIdx].parent != -1) {
-        parentMat = calculateWorldMatrix(sceneGraph[nodeIdx].parent);
+    if (node.parent != -1) {
+        parentMat = calculateWorldMatrix(node.parent);
     }
 
     mat4 localMat = composeMatrix(
-        sceneGraph[nodeIdx].localPosition, 
-        sceneGraph[nodeIdx].localRotation, 
-        sceneGraph[nodeIdx].localScale
+        node.localPosition, 
+        node.localRotation, 
+        node.localScale
     );
 
-    return multiplyMatrices(parentMat, localMat);
+    node.worldMatrix = multiplyMatrices(parentMat, localMat);
+    node.isDirty = false;
+    return node.worldMatrix;
 }
 
 std::vector<UndoState> undoStack;
@@ -158,14 +160,18 @@ void reparent(int childIdx, int newParentIdx) {
 }
 
 void updateHierarchy(int nodeIdx, mat4 parentWorldMat) {
-    if (nodeIdx >= sceneGraph.size()) return;
+    if (nodeIdx >= (int)sceneGraph.size()) return;
     SceneNode& node = sceneGraph[nodeIdx];
 
-    mat4 localMat = composeMatrix(node.localPosition, node.localRotation, node.localScale);
-    mat4 worldMat = multiplyMatrices(parentWorldMat, localMat);
+    bool forceUpdate = node.isDirty;
+    if (forceUpdate) {
+        mat4 localMat = composeMatrix(node.localPosition, node.localRotation, node.localScale);
+        node.worldMatrix = multiplyMatrices(parentWorldMat, localMat);
+        node.isDirty = false;
+    }
 
     vec3 wPos, wRot, wScale;
-    decomposeMatrix(worldMat, wPos, wRot, wScale);
+    decomposeMatrix(node.worldMatrix, wPos, wRot, wScale);
 
     node.gpuData.position.x = wPos.x;
     node.gpuData.position.y = wPos.y;
@@ -182,7 +188,8 @@ void updateHierarchy(int nodeIdx, mat4 parentWorldMat) {
     node.gpuData.rotationEuler.z = wRot.z;
 
     for (int childIdx : node.children) {
-        updateHierarchy(childIdx, worldMat);
+        if (forceUpdate) sceneGraph[childIdx].isDirty = true;
+        updateHierarchy(childIdx, node.worldMatrix);
     }
 }
 

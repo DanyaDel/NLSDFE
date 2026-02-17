@@ -47,10 +47,10 @@ GizmoAxis checkGizmoIntersection(Ray ray, vec3 pivotPos, vec3 camPos) {
     GizmoAxis hit = AXIS_NONE;
 
     if (currentMode == MODE_MOVE || currentMode == MODE_SCALE) {
-        if (intersectSphere(ray, pivotPos, 0.25f * scale) > 0.0f) return AXIS_CENTER;
+        if (intersectSphere(ray, pivotPos, 0.15f * scale) > 0.0f) return AXIS_CENTER;
         
-        float totalLen = 1.3f * scale; 
-        float hitThick = 0.35f * scale;
+        float totalLen = 1.4f * scale; 
+        float hitThick = 0.15f * scale; // Area of sensitivity
         
         float bx = intersectBox(ray, pivotPos + vec3{totalLen/2.0f, 0, 0}, {totalLen/2.0f, hitThick, hitThick});
         float by = intersectBox(ray, pivotPos + vec3{0, totalLen/2.0f, 0}, {hitThick, totalLen/2.0f, hitThick});
@@ -59,10 +59,22 @@ GizmoAxis checkGizmoIntersection(Ray ray, vec3 pivotPos, vec3 camPos) {
         if (bx > 0 && bx < minD) { minD = bx; hit = AXIS_X; }
         if (by > 0 && by < minD) { minD = by; hit = AXIS_Y; }
         if (bz > 0 && bz < minD) { minD = bz; hit = AXIS_Z; }
+
+        if (currentMode == MODE_MOVE) {
+            float pSize = 0.25f * scale;
+            float pOff = 0.4f * scale;
+            float dXY = intersectBox(ray, pivotPos + vec3{pOff, pOff, 0.0f}, vec3{pSize, pSize, 0.05f * scale});
+            float dYZ = intersectBox(ray, pivotPos + vec3{0.0f, pOff, pOff}, vec3{0.05f * scale, pSize, pSize});
+            float dXZ = intersectBox(ray, pivotPos + vec3{pOff, 0.0f, pOff}, vec3{pSize, 0.05f * scale, pSize});
+            
+            if (dXY > 0 && dXY < minD) { minD = dXY; hit = AXIS_XY; }
+            if (dYZ > 0 && dYZ < minD) { minD = dYZ; hit = AXIS_YZ; }
+            if (dXZ > 0 && dXZ < minD) { minD = dXZ; hit = AXIS_XZ; }
+        }
     }
     else if (currentMode == MODE_ROTATE) {
-        float r = 1.0f * scale; 
-        float thick = 0.2f * scale;
+        float r = 1.1f * scale; 
+        float thick = 0.25f * scale;
         float dX = intersectRing(ray, pivotPos, 0, r, thick); 
         float dY = intersectRing(ray, pivotPos, 1, r, thick); 
         float dZ = intersectRing(ray, pivotPos, 2, r, thick); 
@@ -231,6 +243,12 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
 
             if (currentGizmoAxis == AXIS_CENTER) {
                 moveDeltaWorld = (b.right * dx * speed) + (b.up * (-dy) * speed);
+            } else if (currentGizmoAxis >= AXIS_XY) {
+                vec3 a1 = {0,0,0}, a2 = {0,0,0};
+                if (currentGizmoAxis == AXIS_XY) { a1 = {1,0,0}; a2 = {0,1,0}; }
+                if (currentGizmoAxis == AXIS_YZ) { a1 = {0,1,0}; a2 = {0,0,1}; }
+                if (currentGizmoAxis == AXIS_XZ) { a1 = {1,0,0}; a2 = {0,0,1}; }
+                moveDeltaWorld = a1 * getMouseDeltaOnAxis(a1, dx, dy) * speed + a2 * getMouseDeltaOnAxis(a2, dx, dy) * speed;
             } else {
                 vec3 axis = {0,0,0};
                 if (currentGizmoAxis == AXIS_X) axis = {1,0,0}; 
@@ -285,6 +303,7 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
                     }
 
                     sceneGraph[idx].localPosition += localDelta;
+                    sceneGraph[idx].isDirty = true;
                 }
             }
         }
@@ -314,6 +333,7 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
                     if (currentGizmoAxis == AXIS_X) sceneGraph[idx].localRotation.x += delta;
                     if (currentGizmoAxis == AXIS_Y) sceneGraph[idx].localRotation.y += delta;
                     if (currentGizmoAxis == AXIS_Z) sceneGraph[idx].localRotation.z += delta;
+                    sceneGraph[idx].isDirty = true;
                 }
             }
         }
@@ -354,6 +374,7 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
                         sceneGraph[idx].localScale.y += axis.y * deltaS;
                         sceneGraph[idx].localScale.z += axis.z * deltaS;
                     }
+                    sceneGraph[idx].isDirty = true;
                     auto fixZero = [](float& val) { if (std::abs(val) < 0.001f) val = (val >= 0) ? 0.001f : -0.001f; };
                     fixZero(sceneGraph[idx].localScale.x);
                     fixZero(sceneGraph[idx].localScale.y);

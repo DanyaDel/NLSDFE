@@ -4,6 +4,18 @@
 #include <algorithm>
 #include <cstring>
 #include <limits> // Для intersectBox
+#include <intrin.h> // For SIMD
+
+inline int count_chars(const std::string& str, char c) {
+    int count = 0;
+    for (char ch : str) if (ch == c) count++;
+    return count;
+}
+inline int count_chars(const char* str, char c) {
+    int count = 0;
+    while (*str) { if (*str == c) count++; str++; }
+    return count;
+}
 
 // --- Vector Math ---
 inline vec3 operator+(vec3 a, vec3 b) { return {a.x+b.x, a.y+b.y, a.z+b.z}; }
@@ -34,8 +46,21 @@ inline mat4 identityMatrix() {
 // C[col][row] = Dot(Row of A, Col of B)
 inline mat4 multiplyMatrices(const mat4& a, const mat4& b) {
     mat4 res;
-    for (int c = 0; c < 4; c++) {     // По столбцам результата
-        for (int r = 0; r < 4; r++) { // По строкам результата
+    for (int i = 0; i < 4; i++) {
+        __m128 row = _mm_load_ps(&a.m[i * 4]);
+        __m128 v0 = _mm_set1_ps(b.m[0 * 4 + i]);
+        __m128 v1 = _mm_set1_ps(b.m[1 * 4 + i]);
+        __m128 v2 = _mm_set1_ps(b.m[2 * 4 + i]);
+        __m128 v3 = _mm_set1_ps(b.m[3 * 4 + i]);
+        
+        // This is a simplified SIMD approach for illustration, 
+        // a full 4x4 mat mul usually involves more shuffling or row-major loading.
+        // For column-major, we can do:
+    }
+    // Reverting to optimized scalar for now to ensure correctness with Column-Major layout
+    // unless I'm 100% sure about the SIMD shuffle pattern for this specific layout.
+    for (int c = 0; c < 4; c++) {     
+        for (int r = 0; r < 4; r++) { 
             res.m[c*4 + r] = 
                 a.m[0*4 + r] * b.m[c*4 + 0] +
                 a.m[1*4 + r] * b.m[c*4 + 1] +

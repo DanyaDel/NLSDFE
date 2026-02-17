@@ -218,37 +218,58 @@ float sdScaleHandle(vec3 p, float totalLen, float thick, float cubeSize) {
 vec2 mapGizmo(vec3 p, vec3 ro) {
     if (pc.selectedIndex < 0) return vec2(100.0, 0.0);
     
-    // Используем переданный центр выделения, а не позицию отдельного объекта
     vec3 center = pc.gizmoPos;
-    
-    float scale = length(ro - center) * 0.12; 
+    float dist = length(ro - center);
+    float scale = dist * 0.12; 
     vec3 loc = p - center;
     float minD = 10000.0; float axis = 0.0;
     
+    float thick = 0.015 * scale;
+    float len = 1.4 * scale;
+
     if (pc.mode == 0) { // Move
-        float len = 1.3*scale; float th = 0.02*scale; float hL = 0.3*scale; float hW = 0.08*scale;
-        float dX = sdArrow(vec3(loc.y, loc.x, loc.z), len, th, hL, hW);
-        float dY = sdArrow(loc, len, th, hL, hW);
-        float dZ = sdArrow(vec3(loc.y, loc.z, loc.x), len, th, hL, hW);
-        // Центральный шар для перемещения во всех осях
-        float dC = length(loc) - 0.25*scale;
+        float headL = 0.35 * scale;
+        float headW = 0.1 * scale;
+        
+        float dX = sdArrow(vec3(loc.y, loc.x, loc.z), len, thick, headL, headW);
+        float dY = sdArrow(loc, len, thick, headL, headW);
+        float dZ = sdArrow(vec3(loc.y, loc.z, loc.x), len, thick, headL, headW);
+        
+        // Axis Planes (XY, YZ, XZ)
+        float planeS = 0.25 * scale;
+        float planeT = 0.005 * scale;
+        float planeOffset = 0.4 * scale;
+        float dXY = sdBox(loc - vec3(planeOffset, planeOffset, 0), vec3(planeS, planeS, planeT * 0.5));
+        float dYZ = sdBox(loc - vec3(0, planeOffset, planeOffset), vec3(planeT * 0.5, planeS, planeS));
+        float dXZ = sdBox(loc - vec3(planeOffset, 0, planeOffset), vec3(planeS, planeT * 0.5, planeS));
+
+        float dC = length(loc) - 0.15 * scale; // Smaller center sphere
         
         minD = dX; axis = 1.0;
         if (dY < minD) { minD = dY; axis = 2.0; }
         if (dZ < minD) { minD = dZ; axis = 3.0; }
-        if (dC < minD) { minD = dC; axis = 4.0; } // 4.0 = Center Axis
+        if (dXY < minD) { minD = dXY; axis = 5.0; } // 5 = XY Plane
+        if (dYZ < minD) { minD = dYZ; axis = 6.0; } // 6 = YZ Plane
+        if (dXZ < minD) { minD = dXZ; axis = 7.0; } // 7 = XZ Plane
+        if (dC < minD) { minD = dC; axis = 4.0; } 
     } else if (pc.mode == 1) { // Rotate
-        float r = 1.0 * scale; float th = 0.02 * scale;
-        float dX = sdRingX(loc, r, th); float dY = sdRingZ(loc, r, th); float dZ = sdRingY(loc, r, th); 
+        float r = 1.1 * scale; 
+        float ringThick = 0.025 * scale;
+        float dX = sdRingX(loc, r, ringThick); 
+        float dY = sdRingZ(loc, r, ringThick); 
+        float dZ = sdRingY(loc, r, ringThick);
+        float dCam = length(loc) - (r + 0.1 * scale); // Outer ring facing camera (optional)
+        
         minD = dX; axis = 1.0;
         if (dY < minD) { minD = dY; axis = 2.0; }
         if (dZ < minD) { minD = dZ; axis = 3.0; }
     } else if (pc.mode == 2) { // Scale
-        float len = 1.3*scale; float th = 0.02*scale; float cubeS = 0.15*scale;
-        float dX = sdScaleHandle(vec3(loc.y, loc.x, loc.z), len, th, cubeS);
-        float dY = sdScaleHandle(loc, len, th, cubeS);
-        float dZ = sdScaleHandle(vec3(loc.y, loc.z, loc.x), len, th, cubeS);
-        float dC = length(loc) - 0.2*scale; 
+        float cubeS = 0.18 * scale;
+        float dX = sdScaleHandle(vec3(loc.y, loc.x, loc.z), len, thick, cubeS);
+        float dY = sdScaleHandle(loc, len, thick, cubeS);
+        float dZ = sdScaleHandle(vec3(loc.y, loc.z, loc.x), len, thick, cubeS);
+        float dC = length(loc) - 0.15 * scale; 
+        
         minD = dX; axis = 1.0;
         if (dY < minD) { minD = dY; axis = 2.0; }
         if (dZ < minD) { minD = dZ; axis = 3.0; }
@@ -435,20 +456,27 @@ void main() {
             // Попадание в Гизмо
             if (res.x < 0.003 * tG) { 
                 vec3 axisCol = vec3(1.0);
-                if (res.y == 1.0) axisCol = vec3(0.9, 0.2, 0.2); // Red X
-                if (res.y == 2.0) axisCol = vec3(0.2, 0.9, 0.2); // Green Y
-                if (res.y == 3.0) axisCol = vec3(0.2, 0.2, 0.9); // Blue Z
+                float alpha = 1.0;
+                if (res.y == 1.0) axisCol = vec3(1.0, 0.2, 0.2); // Vibrant Red
+                if (res.y == 2.0) axisCol = vec3(0.2, 1.0, 0.2); // Vibrant Green
+                if (res.y == 3.0) axisCol = vec3(0.2, 0.4, 1.0); // Vibrant Blue
                 if (res.y == 4.0) axisCol = vec3(1.0, 1.0, 1.0); // White Center
-                finalColor = axisCol; 
-                break;
+                if (res.y >= 5.0) { // Planes
+                    if (res.y == 5.0) axisCol = vec3(1.0, 1.0, 0.2); // XY
+                    if (res.y == 6.0) axisCol = vec3(0.2, 1.0, 1.0); // YZ
+                    if (res.y == 7.0) axisCol = vec3(1.0, 0.2, 1.0); // XZ
+                    alpha = 0.4; // Semi-transparent planes
+                }
+                finalColor = mix(finalColor, axisCol, alpha); 
+                if (alpha > 0.9) break; // Only stop trace if it's a solid part
             }
             // Попадание в направляющую линию
             if (lineD < 0.003 * tG) {
-                vec3 lineCol = vec3(1.0);
-                if (pc.draggingAxis == 1) lineCol = vec3(0.9, 0.2, 0.2);
-                if (pc.draggingAxis == 2) lineCol = vec3(0.2, 0.9, 0.2);
-                if (pc.draggingAxis == 3) lineCol = vec3(0.2, 0.2, 0.9);
-                finalColor = lineCol; 
+                vec3 lineCol = vec3(1.0, 1.0, 1.0);
+                if (pc.draggingAxis == 1) lineCol = vec3(1.0, 0.4, 0.4);
+                if (pc.draggingAxis == 2) lineCol = vec3(0.4, 1.0, 0.4);
+                if (pc.draggingAxis == 3) lineCol = vec3(0.4, 0.6, 1.0);
+                finalColor = mix(finalColor, lineCol, 0.6); 
                 break;
             }
             
