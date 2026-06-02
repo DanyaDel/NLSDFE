@@ -225,7 +225,7 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
         CameraBasis b = getCameraBasis();
         
         if (currentMode == MODE_MOVE) {
-            float pivotDist = length(b.pos - getSelectionCenter());
+            float pivotDist = glm::length(b.pos - getSelectionCenter());
             float speed = pivotDist * 0.002f; 
             vec3 moveDeltaWorld = {0,0,0};
 
@@ -242,9 +242,6 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
             
             for(int idx : selectedIndices) {
                 if(idx < sceneGraph.size()) {
-                    // --- ВАЖНОЕ ИСПРАВЛЕНИЕ ИЕРАРХИИ ---
-                    // Если у объекта выделен родитель, не двигаем этот объект вручную,
-                    // так как он сдвинется автоматически вслед за родителем.
                     bool parentIsSelected = false;
                     int p = sceneGraph[idx].parent;
                     while (p != -1) {
@@ -255,29 +252,28 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
                         p = sceneGraph[p].parent;
                     }
                     if (parentIsSelected) continue;
-                    // ------------------------------------
 
                     vec3 localDelta = moveDeltaWorld;
                     
                     int parentIdx = sceneGraph[idx].parent;
                     if (parentIdx != -1) {
                         mat4 pMat = calculateWorldMatrix(parentIdx);
-                        vec3 c0 = { pMat.m[0], pMat.m[1], pMat.m[2] };
-                        vec3 c1 = { pMat.m[4], pMat.m[5], pMat.m[6] };
-                        vec3 c2 = { pMat.m[8], pMat.m[9], pMat.m[10] };
+                        vec3 c0 = vec3(pMat[0]);
+                        vec3 c1 = vec3(pMat[1]);
+                        vec3 c2 = vec3(pMat[2]);
                         
-                        float sx = length(c0);
-                        float sy = length(c1);
-                        float sz = length(c2);
+                        float sx = glm::length(c0);
+                        float sy = glm::length(c1);
+                        float sz = glm::length(c2);
                         
                         if(sx > 0.0001f) c0 = c0 / sx;
                         if(sy > 0.0001f) c1 = c1 / sy;
                         if(sz > 0.0001f) c2 = c2 / sz;
                         
                         vec3 rotDelta;
-                        rotDelta.x = dot(c0, moveDeltaWorld);
-                        rotDelta.y = dot(c1, moveDeltaWorld);
-                        rotDelta.z = dot(c2, moveDeltaWorld);
+                        rotDelta.x = glm::dot(c0, moveDeltaWorld);
+                        rotDelta.y = glm::dot(c1, moveDeltaWorld);
+                        rotDelta.z = glm::dot(c2, moveDeltaWorld);
                         
                         if(sx > 0.0001f) localDelta.x = rotDelta.x / sx;
                         if(sy > 0.0001f) localDelta.y = rotDelta.y / sy;

@@ -5,20 +5,33 @@
 #include <GLFW/glfw3.h>
 #include <cmath>
 
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <spdlog/spdlog.h>
+
 const int INITIAL_WIDTH = 1280;
 const int INITIAL_HEIGHT = 720;
 const std::string SHADER_SOURCE = "shaders/shader.comp";
 const std::string SHADER_BINARY = "shader.spv";
+const std::string ENGINE_VERSION = "v1.2.1";
 const int MAX_OBJECTS = 100;
 
 // --- Math Types ---
-struct vec2 { float x, y; };
-struct vec3 { float x, y, z; };
-struct vec4 { float x, y, z, w; };
-struct mat4 { float m[16]; };
+using vec2 = glm::vec2;
+using vec3 = glm::vec3;
+using vec4 = glm::vec4;
+using mat4 = glm::mat4;
 
 struct Ray { vec3 origin; vec3 dir; };
 struct CameraBasis { vec3 pos, fwd, right, up; };
+
+#define VMA_STATIC_VULKAN_FUNCTIONS 0
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 1
+#include "vk_mem_alloc.h"
 
 // --- Polygon Types ---
 struct Vertex {
@@ -30,7 +43,7 @@ struct Vertex {
 
 struct MeshBuffer {
     VkBuffer buffer;
-    VkDeviceMemory memory;
+    VmaAllocation allocation;
     uint32_t count;
 };
 
@@ -141,6 +154,7 @@ inline constexpr float DRAG_THRESHOLD = 3.0f;
 extern GameEditorMode currentEditorMode;
 extern EditorMode currentMode;
 extern GizmoAxis currentGizmoAxis;
+extern vec4 currentUiBounds;
 
 extern CameraState cam;
 // sceneObjects УДАЛЕН - используем только sceneGraph

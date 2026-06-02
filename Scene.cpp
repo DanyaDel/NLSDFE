@@ -3,7 +3,6 @@
 #include <fstream>
 #include <algorithm>
 #include <numeric>
-
 #include <sstream>
 
 OBJModel parseOBJ(const std::string& path) {
@@ -50,7 +49,7 @@ OBJModel parseOBJ(const std::string& path) {
                 if (vIdx > 0 && vIdx <= (int)positions.size()) v.pos = positions[vIdx - 1];
                 if (nIdx > 0 && nIdx <= (int)normals.size()) v.normal = normals[nIdx - 1];
                 if (tIdx > 0 && tIdx <= (int)uvs.size()) v.uv = uvs[tIdx - 1];
-                v.color = {1, 1, 1, 1};
+                v.color = vec4(1, 1, 1, 1);
 
                 model.vertices.push_back(v);
                 model.indices.push_back((uint32_t)model.indices.size());
@@ -58,23 +57,6 @@ OBJModel parseOBJ(const std::string& path) {
         }
     }
     return model;
-}
-
-mat4 calculateWorldMatrix(int nodeIdx) {
-    if (nodeIdx < 0 || nodeIdx >= (int)sceneGraph.size()) return identityMatrix();
-    
-    mat4 parentMat = identityMatrix();
-    if (sceneGraph[nodeIdx].parent != -1) {
-        parentMat = calculateWorldMatrix(sceneGraph[nodeIdx].parent);
-    }
-
-    mat4 localMat = composeMatrix(
-        sceneGraph[nodeIdx].localPosition, 
-        sceneGraph[nodeIdx].localRotation, 
-        sceneGraph[nodeIdx].localScale
-    );
-
-    return multiplyMatrices(parentMat, localMat);
 }
 
 std::vector<UndoState> undoStack;
@@ -101,19 +83,44 @@ void performUndo() {
     selectedIndices = state.selection;
 }
 
+void updateHierarchy(int nodeIdx, mat4 parentWorldMat) {
+    if (nodeIdx < 0 || nodeIdx >= (int)sceneGraph.size()) return;
+    SceneNode& node = sceneGraph[nodeIdx];
+
+    mat4 localMat = composeMatrix(node.localPosition, node.localRotation, node.localScale);
+    mat4 worldMat = parentWorldMat * localMat;
+
+    vec3 wPos, wRot, wScale;
+    decomposeMatrix(worldMat, wPos, wRot, wScale);
+
+    node.gpuData.position = vec4(wPos, node.gpuData.position.w);
+    node.gpuData.scale = vec4(wScale, 0);
+    node.gpuData.invRotation = createInverseRotationMatrix4x4(wRot);
+    node.gpuData.rotationEuler = vec4(wRot, 0);
+
+    for (int childIdx : node.children) {
+        updateHierarchy(childIdx, worldMat);
+    }
+}
+
+mat4 calculateWorldMatrix(int nodeIdx) {
+    if (nodeIdx < 0 || nodeIdx >= (int)sceneGraph.size()) return mat4(1.0f);
+    mat4 local = composeMatrix(sceneGraph[nodeIdx].localPosition, sceneGraph[nodeIdx].localRotation, sceneGraph[nodeIdx].localScale);
+    if (sceneGraph[nodeIdx].parent == -1) return local;
+    return calculateWorldMatrix(sceneGraph[nodeIdx].parent) * local;
+}
+
 vec3 getSelectionCenter() {
-    if (selectedIndices.empty()) return {0,0,0};
-    vec3 center = {0,0,0};
+    if (selectedIndices.empty()) return vec3(0, 0, 0);
+    vec3 center(0, 0, 0);
     int count = 0;
     for (int idx : selectedIndices) {
-        if(idx < sceneGraph.size()) {
-            center.x += sceneGraph[idx].gpuData.position.x;
-            center.y += sceneGraph[idx].gpuData.position.y;
-            center.z += sceneGraph[idx].gpuData.position.z;
+        if (idx >= 0 && idx < (int)sceneGraph.size()) {
+            center += vec3(sceneGraph[idx].gpuData.position);
             count++;
         }
     }
-    if(count > 0) center = center / (float)count;
+    if (count > 0) center /= (float)count;
     return center;
 }
 
@@ -121,7 +128,6 @@ void reparent(int childIdx, int newParentIdx) {
     if (childIdx == newParentIdx) return;
     if (childIdx < 0 || childIdx >= (int)sceneGraph.size()) return;
 
-    // Проверка циклов (нельзя сделать родителя своим ребенком)
     int checkIdx = newParentIdx;
     while (checkIdx != -1) {
         if (checkIdx == childIdx) return; 
@@ -129,60 +135,22 @@ void reparent(int childIdx, int newParentIdx) {
     }
 
     SceneNode& child = sceneGraph[childIdx];
-    
-    // 1. Сохраняем текущее мировое состояние
     mat4 worldMat = calculateWorldMatrix(childIdx);
     
-    // 2. Отцепляем от старого родителя
     if (child.parent != -1) {
         auto& oldChildren = sceneGraph[child.parent].children;
         oldChildren.erase(std::remove(oldChildren.begin(), oldChildren.end(), childIdx), oldChildren.end());
     }
 
-    // 3. Прицепляем к новому
     child.parent = newParentIdx;
     if (newParentIdx != -1) {
         sceneGraph[newParentIdx].children.push_back(childIdx);
-        
-        // 4. Пересчитываем Local = InvParentWorld * World
-        // Чтобы объект визуально остался на месте
         mat4 parentWorld = calculateWorldMatrix(newParentIdx);
-        mat4 invParent = inverseMatrix(parentWorld);
-        mat4 newLocal = multiplyMatrices(invParent, worldMat);
-        
+        mat4 invParent = glm::inverse(parentWorld);
+        mat4 newLocal = invParent * worldMat;
         decomposeMatrix(newLocal, child.localPosition, child.localRotation, child.localScale);
     } else {
-        // Если кинули в корень, то Local = World
         decomposeMatrix(worldMat, child.localPosition, child.localRotation, child.localScale);
-    }
-}
-
-void updateHierarchy(int nodeIdx, mat4 parentWorldMat) {
-    if (nodeIdx >= sceneGraph.size()) return;
-    SceneNode& node = sceneGraph[nodeIdx];
-
-    mat4 localMat = composeMatrix(node.localPosition, node.localRotation, node.localScale);
-    mat4 worldMat = multiplyMatrices(parentWorldMat, localMat);
-
-    vec3 wPos, wRot, wScale;
-    decomposeMatrix(worldMat, wPos, wRot, wScale);
-
-    node.gpuData.position.x = wPos.x;
-    node.gpuData.position.y = wPos.y;
-    node.gpuData.position.z = wPos.z;
-    
-    node.gpuData.scale.x = wScale.x;
-    node.gpuData.scale.y = wScale.y;
-    node.gpuData.scale.z = wScale.z;
-
-    node.gpuData.invRotation = createInverseRotationMatrix4x4(wRot);
-    
-    node.gpuData.rotationEuler.x = wRot.x;
-    node.gpuData.rotationEuler.y = wRot.y;
-    node.gpuData.rotationEuler.z = wRot.z;
-
-    for (int childIdx : node.children) {
-        updateHierarchy(childIdx, worldMat);
     }
 }
 
@@ -191,18 +159,16 @@ void deleteSelectedObject() {
     saveUndo();
     std::sort(selectedIndices.rbegin(), selectedIndices.rend());
     for (int idx : selectedIndices) {
-        if (idx < sceneGraph.size()) {
+        if (idx < (int)sceneGraph.size()) {
             int pIdx = sceneGraph[idx].parent;
-            if (pIdx != -1 && pIdx < sceneGraph.size()) {
+            if (pIdx != -1 && pIdx < (int)sceneGraph.size()) {
                 auto& c = sceneGraph[pIdx].children;
                 c.erase(std::remove(c.begin(), c.end(), idx), c.end());
             }
-            // Детей пока делаем сиротами (в корень)
             for(int child : sceneGraph[idx].children) {
-                if(child < sceneGraph.size()) sceneGraph[child].parent = -1;
+                if(child < (int)sceneGraph.size()) sceneGraph[child].parent = -1;
             }
             sceneGraph.erase(sceneGraph.begin() + idx);
-            // Сдвиг индексов 
             for(auto& node : sceneGraph) {
                 if(node.parent > idx) node.parent--;
                 for(int& c : node.children) if(c > idx) c--;
@@ -235,18 +201,20 @@ void resetScene() {
     selectedIndices.clear();
     sceneGraph.clear();
     
-    mat4 identity = identityMatrix();
+    spdlog::info("Resetting scene to default");
+    
+    mat4 identity = mat4(1.0f);
     auto addNode = [&](std::string name, int type, vec3 pos, vec3 scale, vec3 col) {
         SceneNode n;
         n.name = name;
         n.localPosition = pos;
         n.localScale = scale;
         n.gpuData.invRotation = identity;
-        n.gpuData.position = {0,0,0, (float)type}; 
-        n.gpuData.scale = {1,1,1,0};
-        n.gpuData.params = {1.0f, 0, 0.1f, 0}; 
-        n.gpuData.color = {col.x, col.y, col.z, 1.0f};
-        n.gpuData.rotationEuler = {0,0,0,0};
+        n.gpuData.position = vec4(0, 0, 0, (float)type); 
+        n.gpuData.scale = vec4(1, 1, 1, 0);
+        n.gpuData.params = vec4(1.0f, 0, 0.1f, 0); 
+        n.gpuData.color = vec4(col, 1.0f);
+        n.gpuData.rotationEuler = vec4(0, 0, 0, 0);
         sceneGraph.push_back(n);
     };
 

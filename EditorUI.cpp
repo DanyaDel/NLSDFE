@@ -27,11 +27,25 @@ struct ChangelogEntry {
 };
 
 const std::vector<ChangelogEntry> appChangelog = {
-    ChangelogEntry("v1.5 - Hierarchy Fix", "10.01.2026", { 
-    "Added Drag & Drop grouping", 
-    "Fixed double-transform on parent/child selection", 
-    "Added 'Unparent' area" 
-})};
+    ChangelogEntry("v1.2.1 - Optimization & Quality", "02.06.2026", {
+        "Implemented Bounding Sphere optimization (significant FPS boost)",
+        "Increased Raymarching steps from 32 to 128 (Ultra Quality)",
+        "Improved Shadow precision and resolution",
+        "Finer hit-threshold for smooth edges"
+    }),
+    ChangelogEntry("v1.2.0 - Core Modernization", "02.06.2026", {
+        "Integrated GLM for high-performance mathematics",
+        "Integrated spdlog for professional terminal logging",
+        "Integrated VMA (Vulkan Memory Allocator) for stable GPU memory management",
+        "Fixed hardcoded resource paths for improved portability",
+        "Major architectural refactoring (Renderer extraction)"
+    }),
+    ChangelogEntry("v1.1.0 - Hierarchy Fix", "10.01.2026", { 
+        "Added Drag & Drop grouping", 
+        "Fixed double-transform on parent/child selection", 
+        "Added 'Unparent' area" 
+    })
+};
 
 void DrawSceneNode(int nodeIdx); 
 

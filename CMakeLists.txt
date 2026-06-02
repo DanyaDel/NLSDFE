@@ -4,9 +4,44 @@ project(SDF_Engine)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Vulkan REQUIRED)
+find_package(Vulkan)
 
 include(FetchContent)
+
+if(NOT Vulkan_FOUND OR NOT Vulkan_INCLUDE_DIR)
+    message(STATUS "Vulkan headers not found, fetching from GitHub...")
+    FetchContent_Declare(
+      vulkan_headers
+      URL https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/v1.3.275.zip
+    )
+    FetchContent_MakeAvailable(vulkan_headers)
+    # Vulkan-Headers provides a header-only target: Vulkan::Headers
+    # But we might need to define Vulkan_INCLUDE_DIR for older find_package logic or other uses
+    get_target_property(Vulkan_INCLUDE_DIR Vulkan::Headers INTERFACE_INCLUDE_DIRECTORIES)
+    set(Vulkan_FOUND TRUE)
+    set(Vulkan_LIBRARIES "vulkan") # Assume standard loader is available as libvulkan.so
+endif()
+
+# --- GLM ---
+FetchContent_Declare(
+  glm
+  URL https://github.com/g-truc/glm/archive/refs/tags/1.0.1.zip
+)
+FetchContent_MakeAvailable(glm)
+
+# --- VMA ---
+FetchContent_Declare(
+  vma
+  URL https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/archive/refs/tags/v3.1.0.zip
+)
+FetchContent_MakeAvailable(vma)
+
+# --- spdlog ---
+FetchContent_Declare(
+  spdlog
+  URL https://github.com/gabime/spdlog/archive/refs/tags/v1.13.0.zip
+)
+FetchContent_MakeAvailable(spdlog)
 
 # --- GLFW ---
 FetchContent_Declare(
@@ -38,12 +73,19 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
 )
 
-add_executable(SDF_Engine main.cpp EditorUI.cpp EngineBridge.cpp Scene.cpp Input.cpp Globals.cpp FileDialogs.cpp ${IMGUI_SOURCES})
+add_executable(SDF_Engine main.cpp Renderer.cpp EditorUI.cpp EngineBridge.cpp Scene.cpp Input.cpp Globals.cpp FileDialogs.cpp ${IMGUI_SOURCES})
 
 # Инклюды для ImGui
 target_include_directories(SDF_Engine PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends)
 
-target_link_libraries(SDF_Engine PRIVATE Vulkan::Vulkan glfw)
+if(TARGET Vulkan::Vulkan)
+    target_link_libraries(SDF_Engine PRIVATE Vulkan::Vulkan glfw glm::glm spdlog::spdlog)
+else()
+    target_link_libraries(SDF_Engine PRIVATE Vulkan::Headers ${Vulkan_LIBRARIES} glfw glm::glm spdlog::spdlog)
+endif()
+
+# VMA include path (FetchContent target might not expose it directly depending on version)
+target_include_directories(SDF_Engine PRIVATE ${vma_SOURCE_DIR}/include)
 
 find_program(GLSLC_EXECUTABLE glslc HINTS $ENV{VULKAN_SDK}/Bin)
 if(GLSLC_EXECUTABLE)

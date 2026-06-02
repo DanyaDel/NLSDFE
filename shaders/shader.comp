@@ -90,10 +90,7 @@ vec2 mapScene(vec3 p) {
         vec3 absScl = abs(rawScl);
         float size = scene.objects[i].params.x;
         int type = int(scene.objects[i].position.w);
-        if (type < 0) continue; // Skip meshes in SDF raymarching
-
-        int op = int(scene.objects[i].params.y);
-        float smoothK = max(scene.objects[i].params.z, 0.001);
+        if (type < 0) continue; 
 
         vec3 localP = p - pos;
         localP = (scene.objects[i].invRotation * vec4(localP, 1.0)).xyz;
@@ -108,6 +105,9 @@ vec2 mapScene(vec3 p) {
         }
 
         vec2 currentObj = vec2(d, float(i));
+        int op = int(scene.objects[i].params.y);
+        float smoothK = max(scene.objects[i].params.z, 0.001);
+
         if (i == 0) globalRes = currentObj;
         else {
             if (op == 0) globalRes = opSmoothUnion(globalRes, currentObj, smoothK); 
@@ -143,13 +143,13 @@ float calcSoftShadow(vec3 ro, vec3 rd, float tmin, float tmax, float k) {
     float res = 1.0; 
     float t = tmin + (rand(gl_GlobalInvocationID.xy) * 0.02); 
     float ph = 1e10;
-    for(int i=0; i<16; i++) {
+    for(int i=0; i<32; i++) {
         float h = mapScene(ro + rd*t).x;
         float y = h*h/(2.0*ph);
         float d = sqrt(h*h-y*y);
         res = min(res, k*d/max(0.0, t-y));
         ph = h; 
-        t += clamp(h, 0.02, 0.5);
+        t += clamp(h, 0.01, 0.5);
         if(res < 0.005 || t > tmax) break;
     }
     return clamp(res, 0.0, 1.0);
@@ -157,7 +157,7 @@ float calcSoftShadow(vec3 ro, vec3 rd, float tmin, float tmax, float k) {
 
 float calcHardShadow(vec3 ro, vec3 rd, float tmax) {
     float t = 0.05;
-    for(int i=0; i<32; i++) {
+    for(int i=0; i<64; i++) {
         float h = mapScene(ro + rd*t).x;
         if(h < 0.001) return 0.0;
         t += h;
@@ -301,17 +301,17 @@ void main() {
 
     // --- Рендеринг сцены ---
     for(int bounce = 0; bounce < maxBounces; bounce++) {
-        float t = 0.1; float tMax = 50.0;
+        float t = 0.1; float tMax = 100.0;
         float pixelRadius = 1.0 / (pc.resolution.y * 0.5);
         float objID = -1.0; bool hit = false;
         
         int stepsTaken = 0;
-        for(int i=0; i<32; i++) {
+        for(int i=0; i<128; i++) {
             stepsTaken++;
             vec3 p = ro + rd * t;
             vec2 res = mapScene(p);
             float d = res.x;
-            if (abs(d) < (pixelRadius * t)) { 
+            if (abs(d) < (pixelRadius * t * 0.5)) { 
                 hit = true; objID = res.y; 
                 if(bounce == 0) firstHitT = t;
                 break; 

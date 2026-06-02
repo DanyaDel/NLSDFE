@@ -22,6 +22,7 @@ NosHeader lastLoadedHeader = {};
 GameEditorMode currentEditorMode = EDITOR_OBJECT;
 EditorMode currentMode = MODE_MOVE;
 GizmoAxis currentGizmoAxis = AXIS_NONE;
+vec4 currentUiBounds = {0,0,0,0};
 CameraState cam;
 
 bool triggerSceneContextMenu = false;
