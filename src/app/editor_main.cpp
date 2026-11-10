@@ -1,5 +1,5 @@
 /*
-   SDF Engine - Main Source (Refactored: Renderer Extracted)
+   SDF Engine - Editor entry point
 */
 
 #ifdef _WIN32
@@ -32,6 +32,7 @@
 #include "Game.h"
 #include "EngineExports.h"
 #include "Renderer.h"
+#include "App.h"
 #include "imgui.h"
 
 namespace fs = std::filesystem;
@@ -39,7 +40,6 @@ namespace fs = std::filesystem;
 // Параметры командной строки
 struct LaunchOptions {
     std::string openFile;      // сцена для открытия в редакторе
-    std::string playFile;      // --play: запустить сцену как игру, без редактора
     std::string screenshot;    // --screenshot: сохранить SDF-кадр в .ppm и выйти
     int benchFrames = 0;       // --bench N: замерить N кадров и выйти
     int benchObjects = 0;      // --bench-objects N: добавить N объектов для нагрузки
@@ -49,7 +49,7 @@ struct LaunchOptions {
     bool noVsync = false;
 };
 
-class Engine {
+class Engine : public App {
 public:
     void run(const LaunchOptions& opts) {
         #ifdef _WIN32
@@ -61,10 +61,6 @@ public:
         spdlog::set_pattern("[%T] [%^%l%$] %v");
         spdlog::info("SDF Engine {} starting...", ENGINE_VERSION);
 
-        // Экспортированная игра — это тот же бинарник с game.nos по соседству
-        std::string bundled = getExecutableDir() + "/game.nos";
-        if (options.playFile.empty() && options.openFile.empty() && fs::exists(bundled)) options.playFile = bundled;
-        bool standalone = !options.playFile.empty();
         bool automated = options.benchFrames > 0 || !options.screenshot.empty();
 
         bool firstRun = !loadSettings(settingsPath());
@@ -73,37 +69,24 @@ public:
         if (options.noVsync || options.benchFrames > 0) gfx.vsync = false;
 
         resetScene();
-        initWindow();
-        renderer.init(window);
-        renderer.setupInternalLogo(window);
+        initApp("Next Level Signed Distance Field Engine", automated);
+        glfwSetCursorPosCallback(window, cursor_pos_callback);
+        glfwSetMouseButtonCallback(window, mouse_button_callback);
+        glfwSetScrollCallback(window, scroll_callback);
 
-        // Первый запуск: стартовое качество подбираем по типу видеокарты
         if (firstRun && options.preset < 0) {
-            int preset = PRESET_POTATO;
-            if (renderStats.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) preset = PRESET_HIGH;
-            else if (renderStats.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU) preset = PRESET_LOW;
-            applyPreset(preset);
-            spdlog::info("First run: quality preset '{}' selected for this GPU", presetName(preset));
-            if (!automated && !standalone) saveSettings(settingsPath());
+            applyFirstRunPreset();
+            if (!automated) saveSettings(settingsPath());
         }
 
         if (options.shadingMode >= 0) currentShadingMode = std::clamp(options.shadingMode, 0, 3);
         if (!options.openFile.empty()) PublicLoadNos(options.openFile, false);
         if (options.benchObjects > 0) addBenchmarkObjects(options.benchObjects);
 
-        if (standalone) {
-            if (!loadScene(options.playFile, false)) throw std::runtime_error("Cannot load scene: " + options.playFile);
-            currentShadingMode = SHADING_RENDERED;
-            updateSceneCaches();
-            play.standalone = true;
-            startPlay(window);
-        }
-
         mainLoop();
 
-        if (!standalone && !automated) saveSettings(settingsPath());
-        renderer.cleanup();
-        cleanupWindow();
+        if (!automated) saveSettings(settingsPath());
+        shutdownApp();
 
         #ifdef _WIN32
         CoUninitialize();
@@ -113,10 +96,7 @@ public:
     }
 
     void PublicSaveNos(const std::string& path) {
-        int w = 0, h = 0;
-        std::vector<uint8_t> fullRes = renderer.captureScreenshot(w, h);
-        std::vector<uint8_t> thumbnail = downsamplePixels(fullRes, w, h, NOS_THUMB_W, NOS_THUMB_H);
-        if (saveScene(path, thumbnail)) { currentLoadedFile = path; showToast("Saved: " + fs::path(path).filename().string()); }
+        if (saveScene(path, captureThumbnail())) { currentLoadedFile = path; showToast("Saved: " + fs::path(path).filename().string()); }
         else showToast("Save failed: " + path);
     }
 
@@ -125,20 +105,9 @@ public:
         showToast((append ? "Appended: " : "Loaded: ") + fs::path(path).filename().string());
     }
 
-    // Меши кэшируются по пути: один файл — один набор буферов на GPU
-    int GetOrLoadMesh(const std::string& path) {
-        for (int i = 0; i < (int)meshCache.size(); i++) if (meshCache[i].path == path) return meshCache[i].isLoaded ? i : -1;
-        OBJModel model = parseOBJ(path);
-        MeshData md;
-        md.path = path;
-        if (!renderer.uploadMesh(model, md)) { spdlog::error("Cannot load mesh: {}", path); return -1; }
-        meshCache.push_back(md);
-        return (int)meshCache.size() - 1;
-    }
-
     void LoadMeshInternal(const std::string& path) {
         if (sceneGraph.size() >= MAX_OBJECTS) { showToast("Scene is full"); return; }
-        int meshIdx = GetOrLoadMesh(path);
+        int meshIdx = getOrLoadMesh(path);
         if (meshIdx < 0) { showToast("Cannot load mesh"); return; }
         const MeshData& md = meshCache[meshIdx];
 
@@ -165,15 +134,18 @@ public:
     void* CreateUiTexture(const uint8_t* rgba, int w, int h) { return renderer.createTexture(rgba, w, h); }
     void DestroyUiTexture(void* id) { renderer.destroyTexture(id); }
 
-    // Игра = бинарник движка + шейдеры + сцена game.nos в одной папке
+    // Игра = плеер + шейдеры + сцена game.nos в одной папке
     bool ExportGame(const std::string& directory) {
         std::error_code ec;
         fs::create_directories(directory, ec);
         if (!fs::is_directory(directory, ec)) return false;
 
+        // В игру уходит плеер, а не редактор
         fs::path exe = getExecutablePath();
-        fs::copy_file(exe, fs::path(directory) / exe.filename(), fs::copy_options::overwrite_existing, ec);
-        if (ec) { spdlog::error("Export: cannot copy executable: {}", ec.message()); return false; }
+        fs::path player = exe.parent_path() / ("NLSDFE_Player" + exe.extension().string());
+        if (!fs::exists(player, ec)) { spdlog::error("Export: {} not found next to the editor", player.string()); return false; }
+        fs::copy_file(player, fs::path(directory) / player.filename(), fs::copy_options::overwrite_existing, ec);
+        if (ec) { spdlog::error("Export: cannot copy player: {}", ec.message()); return false; }
         for (const auto& entry : fs::directory_iterator(getExecutableDir(), ec)) {
             if (entry.path().extension() == ".spv") fs::copy_file(entry.path(), fs::path(directory) / entry.path().filename(), fs::copy_options::overwrite_existing, ec);
         }
@@ -182,60 +154,14 @@ public:
             if (node.meshPath.empty()) continue;
             fs::copy_file(node.meshPath, fs::path(directory) / fs::path(node.meshPath).filename(), fs::copy_options::overwrite_existing, ec);
         }
-        int w = 0, h = 0;
-        std::vector<uint8_t> shot = renderer.captureScreenshot(w, h);
-        if (!saveScene((fs::path(directory) / "game.nos").string(), downsamplePixels(shot, w, h, NOS_THUMB_W, NOS_THUMB_H))) return false;
+        if (!saveScene((fs::path(directory) / "game.nos").string(), captureThumbnail())) return false;
         saveSettings((fs::path(directory) / settingsPath()).string());
         spdlog::info("Game exported to {}", directory);
         return true;
     }
 
-    bool framebufferResized = false;
-
 private:
-    GLFWwindow* window;
-    Renderer renderer;
     LaunchOptions options;
-
-    static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
-        auto app = reinterpret_cast<Engine*>(glfwGetWindowUserPointer(window));
-        app->framebufferResized = true;
-    }
-
-    void initWindow() {
-        if (!glfwInit()) throw std::runtime_error("Failed to init GLFW");
-        if (!glfwVulkanSupported()) throw std::runtime_error("Vulkan is not supported on this system: install a Vulkan driver for your GPU");
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        // Замеры идут в окне фиксированного размера, иначе тайловый WM растянет его как захочет
-        if (options.benchFrames > 0 || !options.screenshot.empty()) glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-        window = glfwCreateWindow(INITIAL_WIDTH, INITIAL_HEIGHT, "Next Level Signed Distance Field Engine", nullptr, nullptr);
-        if (!window) throw std::runtime_error("Failed to create window");
-        glfwSetWindowUserPointer(window, this);
-        glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
-        glfwSetCursorPosCallback(window, cursor_pos_callback);
-        glfwSetMouseButtonCallback(window, mouse_button_callback);
-        glfwSetScrollCallback(window, scroll_callback);
-    }
-
-    void cleanupWindow() {
-        glfwDestroyWindow(window);
-        glfwTerminate();
-    }
-
-    std::vector<uint8_t> downsamplePixels(const std::vector<uint8_t>& srcPixels, int srcW, int srcH, int dstW, int dstH) {
-        std::vector<uint8_t> outPixels((size_t)dstW * dstH * 4, 0);
-        if (srcW <= 0 || srcH <= 0 || srcPixels.size() < (size_t)srcW * srcH * 4) return outPixels;
-        float xRatio = ((float)(srcW)) / dstW; float yRatio = ((float)(srcH)) / dstH;
-        for (int i = 0; i < dstH; i++) {
-            for (int j = 0; j < dstW; j++) {
-                int px = std::min((int)(j * xRatio), srcW - 1); int py = std::min((int)(i * yRatio), srcH - 1);
-                int srcIdx = (py * srcW + px) * 4; int dstIdx = (i * dstW + j) * 4;
-                outPixels[dstIdx + 0] = srcPixels[srcIdx + 0]; outPixels[dstIdx + 1] = srcPixels[srcIdx + 1];
-                outPixels[dstIdx + 2] = srcPixels[srcIdx + 2]; outPixels[dstIdx + 3] = 255;
-            }
-        }
-        return outPixels;
-    }
 
     // Сетка из чередующихся примитивов — нагрузка для --bench
     void addBenchmarkObjects(int count) {
@@ -251,16 +177,6 @@ private:
             sceneGraph.push_back(n);
         }
         cam.radius = 12.0f;
-    }
-
-    void writeScreenshot(const std::string& path) {
-        int w = 0, h = 0;
-        std::vector<uint8_t> pixels = renderer.captureScreenshot(w, h);
-        if (pixels.empty()) { spdlog::error("Screenshot failed: nothing rendered yet"); return; }
-        std::ofstream f(path, std::ios::binary);
-        f << "P6\n" << w << " " << h << "\n255\n";
-        for (int i = 0; i < w * h; i++) f.write(reinterpret_cast<const char*>(&pixels[i * 4]), 3);
-        spdlog::info("Screenshot saved: {} ({}x{})", path, w, h);
     }
 
     void mainLoop() {
@@ -285,6 +201,7 @@ private:
             processInput(window, deltaTime);
             updatePlay(window, deltaTime);
             renderUI(window);
+            renderer.drawGrid = editorCfg.showGrid && !isPlayMode();
             updateSceneCaches();   // Правки этого кадра (гизмо, инспектор, логика) сразу попадают в рендер
 
             renderer.drawFrame(window, framebufferResized);
@@ -314,7 +231,7 @@ private:
             }
         }
         if (renderStats.validationErrors > 0) spdlog::error("Vulkan validation errors: {}", renderStats.validationErrors);
-        if (isPlayMode()) { play.standalone = false; stopPlay(window); }
+        if (isPlayMode()) stopPlay(window);
     }
 };
 
@@ -323,7 +240,6 @@ static Engine* engine() { return reinterpret_cast<Engine*>(g_engine); }
 void Engine_PublicSaveNos(const std::string& path) { if (g_engine) engine()->PublicSaveNos(path); }
 void Engine_PublicLoadNos(const std::string& path, bool append) { if (g_engine) engine()->PublicLoadNos(path, append); }
 void Engine_LoadMesh(const std::string& path) { if (g_engine) engine()->LoadMeshInternal(path); }
-int Engine_GetOrLoadMesh(const std::string& path) { return g_engine ? engine()->GetOrLoadMesh(path) : -1; }
 void* Engine_CreateUiTexture(const uint8_t* rgba, int w, int h) { return g_engine ? engine()->CreateUiTexture(rgba, w, h) : nullptr; }
 void Engine_DestroyUiTexture(void* textureId) { if (g_engine) engine()->DestroyUiTexture(textureId); }
 bool Engine_ExportGame(const std::string& directory) { return g_engine && engine()->ExportGame(directory); }
@@ -331,7 +247,6 @@ bool Engine_ExportGame(const std::string& directory) { return g_engine && engine
 static void printUsage() {
     std::cout <<
         "Usage: SDF_Engine [scene.nos] [options]\n"
-        "  --play <scene.nos>     run the scene as a game (no editor)\n"
         "  --preset <0..4>        quality preset: 0 Potato, 1 Low, 2 Medium, 3 High, 4 Ultra\n"
         "  --mode <0..3>          shading: 0 Wire, 1 Solid, 2 Material, 3 Rendered\n"
         "  --gpu <index>          pick a GPU (-1 = auto)\n"
@@ -349,7 +264,6 @@ int main(int argc, char** argv) {
             std::string a = argv[i];
             auto next = [&]() -> std::string { if (i + 1 >= argc) throw std::runtime_error("Missing value for " + a); return argv[++i]; };
             if (a == "--help" || a == "-h") { printUsage(); return EXIT_SUCCESS; }
-            else if (a == "--play") opts.playFile = next();
             else if (a == "--preset") opts.preset = std::stoi(next());
             else if (a == "--mode") opts.shadingMode = std::stoi(next());
             else if (a == "--gpu") opts.gpu = std::stoi(next());

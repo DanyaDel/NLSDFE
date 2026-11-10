@@ -657,47 +657,16 @@ static void renderInspector() {
 // --- Главный кадр интерфейса ---
 // =================================================================
 void beginUIFrame() {
-    ImGui_ImplVulkan_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
-    ImGui::NewFrame();
+    uiNewFrame();
     setupImGuiStyle();
 }
 
 bool uiNeedsAnimation() { return toast.active; }
 
-static void renderToast() {
-    if (!toast.active) return;
-    ImGuiIO& io = ImGui::GetIO();
-    float width = std::max(200.0f, ImGui::CalcTextSize(toast.message.c_str()).x + 40.0f);
-    ImGui::SetNextWindowPos(ImVec2(viewportRect.x + (viewportRect.z - width) * 0.5f, viewportRect.y + viewportRect.w - 60));
-    ImGui::SetNextWindowSize(ImVec2(width, 40));
-    ImGui::Begin("Toast", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing);
-    TextCentered(toast.message);
-    ImGui::End();
-    toast.timer -= io.DeltaTime;
-    if (toast.timer <= 0) toast.active = false;
-}
-
-static void renderPlayOverlay() {
-    ImGuiIO& io = ImGui::GetIO();
-    viewportRect = vec4(0, 0, io.DisplaySize.x, io.DisplaySize.y);
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    ImVec2 c(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-    dl->AddCircleFilled(c, 2.5f, IM_COL32(255, 255, 255, 200));
-    if (!play.standalone) dl->AddText(ImVec2(10, 8), IM_COL32(255, 255, 255, 180), "PLAY MODE  |  WASD move, Space jump, Shift run  |  Esc or F5 to stop");
-    if (editorCfg.showStats && !play.standalone) {
-        char buf[128];
-        snprintf(buf, sizeof(buf), "%.0f FPS | SDF %dx%d | GPU %.2f ms", io.Framerate, renderStats.renderW, renderStats.renderH, renderStats.gpuMs);
-        dl->AddText(ImVec2(10, 26), IM_COL32(255, 255, 255, 180), buf);
-    }
-    renderToast();
-    ImGui::Render();
-}
-
 void renderUI(GLFWwindow* window) {
     ImGuiIO& io = ImGui::GetIO();
 
-    if (isPlayMode()) { renderPlayOverlay(); return; }
+    if (isPlayMode()) { drawPlayHud(); ImGui::Render(); return; }
 
     if (!isFirstRunCheckDone) {
         if (!std::filesystem::exists("imgui.ini")) showAboutWindow = true;
@@ -881,7 +850,7 @@ void renderUI(GLFWwindow* window) {
     if (showAssetBrowser) renderAssetBrowser(toolbarWidth, topOffset + workspaceHeight - assetHeight, centerWidth, assetHeight);
 
     drawViewportOverlays();
-    renderToast();
+    drawToast();
 
     if (triggerSceneContextMenu) { ImGui::OpenPopup("SceneContextMenu"); triggerSceneContextMenu = false; }
     if (ImGui::BeginPopup("SceneContextMenu")) {

@@ -1,5 +1,8 @@
 #include "Game.h"
 #include "Scene.h"
+#include "Settings.h"
+#include "Renderer.h"
+#include "imgui.h"
 #include <algorithm>
 
 PlayState play;
@@ -109,12 +112,15 @@ void startPlay(GLFWwindow* window) {
     if (glfwRawMouseMotionSupported()) glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
     glfwGetCursorPos(window, &play.lastMouseX, &play.lastMouseY);
     play.active = true;
+    cameraOverrideBasis = getPlayCameraBasis();
+    cameraOverride = true;
     spdlog::info("Play Mode started");
 }
 
 void stopPlay(GLFWwindow* window) {
     if (!play.active) return;
     play.active = false;
+    cameraOverride = false;
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     if (play.standalone) { glfwSetWindowShouldClose(window, GLFW_TRUE); return; }
     sceneGraph = savedScene;
@@ -164,4 +170,34 @@ void updatePlay(GLFWwindow* window, float deltaTime) {
     if (play.pos.y < KILL_HEIGHT) { play.pos = play.spawn; play.vel = vec3(0); }
 
     updateTriggers();
+    cameraOverrideBasis = getPlayCameraBasis();
+}
+
+void drawToast() {
+    if (!toast.active) return;
+    ImGuiIO& io = ImGui::GetIO();
+    float width = std::max(200.0f, ImGui::CalcTextSize(toast.message.c_str()).x + 40.0f);
+    ImGui::SetNextWindowPos(ImVec2(viewportRect.x + (viewportRect.z - width) * 0.5f, viewportRect.y + viewportRect.w - 60));
+    ImGui::SetNextWindowSize(ImVec2(width, 40));
+    ImGui::Begin("Toast", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing);
+    ImGui::SetCursorPosX((ImGui::GetWindowSize().x - ImGui::CalcTextSize(toast.message.c_str()).x) * 0.5f);
+    ImGui::TextUnformatted(toast.message.c_str());
+    ImGui::End();
+    toast.timer -= io.DeltaTime;
+    if (toast.timer <= 0) toast.active = false;
+}
+
+void drawPlayHud() {
+    ImGuiIO& io = ImGui::GetIO();
+    viewportRect = vec4(0, 0, io.DisplaySize.x, io.DisplaySize.y);
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    ImVec2 c(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+    dl->AddCircleFilled(c, 2.5f, IM_COL32(255, 255, 255, 200));
+    if (!play.standalone) dl->AddText(ImVec2(10, 8), IM_COL32(255, 255, 255, 180), "PLAY MODE  |  WASD move, Space jump, Shift run  |  Esc or F5 to stop");
+    if (editorCfg.showStats && !play.standalone) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "%.0f FPS | SDF %dx%d | GPU %.2f ms", io.Framerate, renderStats.renderW, renderStats.renderH, renderStats.gpuMs);
+        dl->AddText(ImVec2(10, 26), IM_COL32(255, 255, 255, 180), buf);
+    }
+    drawToast();
 }

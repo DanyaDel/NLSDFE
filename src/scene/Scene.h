@@ -1,6 +1,7 @@
 #pragma once
 #include "Common.h"
 #include <vector>
+#include <functional>
 
 struct UndoState {
     std::vector<SceneNode> objects;
@@ -50,6 +51,8 @@ extern const std::vector<MaterialPreset> materialPresets;
 void applyMaterialPreset(SceneNode& node, const MaterialPreset& preset);
 
 // --- Файлы сцен (.nos) ---
+// Загрузчик мешей подставляет приложение (нужен GPU): путь -> индекс в meshCache или -1
+extern std::function<int(const std::string&)> g_meshLoader;
 inline constexpr int NOS_THUMB_W = 256;
 inline constexpr int NOS_THUMB_H = 144;
 bool saveScene(const std::string& path, const std::vector<uint8_t>& thumbnailRgba);

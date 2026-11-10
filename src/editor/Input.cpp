@@ -15,46 +15,8 @@ static vec3 dragMoveApplied = {0, 0, 0};
 static float dragAngleAccum = 0.0f;
 static float dragAngleApplied = 0.0f;
 
-CameraBasis getCameraBasis() {
-    if (isPlayMode()) return getPlayCameraBasis();
-    cam.phi = std::clamp(cam.phi, 0.01f, 3.14159f - 0.01f);
-    vec3 offset = { 
-        cam.radius * std::sin(cam.phi) * std::sin(cam.theta), 
-        cam.radius * std::cos(cam.phi), 
-        cam.radius * std::sin(cam.phi) * std::cos(cam.theta) 
-    };
-    vec3 pos = cam.target + offset;
-    vec3 fwd = normalize(cam.target - pos); 
-    vec3 worldUp = {0.0f, 1.0f, 0.0f};
-    vec3 right = normalize(cross(fwd, worldUp));
-    vec3 up = normalize(cross(right, fwd)); 
-    return {pos, fwd, right, up};
-}
-
-// Одно значение на рендер, выбор объектов и проекцию оверлеев
-float getCameraFocalLength() {
-    return 1.0f / std::tan(glm::radians(editorCfg.fovDeg) * 0.5f);
-}
-
 bool isInViewport(double x, double y) {
     return x >= viewportRect.x && y >= viewportRect.y && x < viewportRect.x + viewportRect.z && y < viewportRect.y + viewportRect.w;
-}
-
-bool projectWorldToScreen(vec3 worldPos, vec2& outScreen) {
-    CameraBasis b = getCameraBasis();
-    vec3 rel = worldPos - b.pos;
-    vec3 viewPos;
-    viewPos.x = dot(rel, b.right);
-    viewPos.y = dot(rel, b.up);
-    viewPos.z = dot(rel, -b.fwd); 
-    if (viewPos.z >= -0.01f) return false; 
-    float f = getCameraFocalLength();
-    float x = viewPos.x * f / -viewPos.z;
-    float y = viewPos.y * f / -viewPos.z;
-    float width = viewportRect.z, height = viewportRect.w;
-    outScreen.x = viewportRect.x + (x * height + width) * 0.5f;
-    outScreen.y = viewportRect.y + (height - y * height) * 0.5f;
-    return true;
 }
 
 GizmoAxis checkGizmoIntersection(Ray ray, vec3 pivotPos, vec3 camPos) {

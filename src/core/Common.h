@@ -247,6 +247,9 @@ extern NosHeader lastLoadedHeader;
 extern void* g_AppLogoID;
 
 void showToast(std::string text);
+// Play Mode подменяет камеру редактора своей (см. runtime/Game.cpp)
+extern bool cameraOverride;
+extern CameraBasis cameraOverrideBasis;
 CameraBasis getCameraBasis();
 float getCameraFocalLength();
 bool projectWorldToScreen(vec3 worldPos, vec2& outScreen);

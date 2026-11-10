@@ -9,6 +9,7 @@ namespace fs = std::filesystem;
 
 struct OBJModel;
 
+void uiNewFrame();   // Начало кадра ImGui (бэкенды Vulkan + GLFW)
 std::string getExecutablePath();
 std::string getExecutableDir();
 
@@ -53,6 +54,8 @@ public:
 
     // Рисовать SDF каждый кадр в полном качестве (бенчмарк)
     bool continuous = false;
+    // Сетка пола — оверлей редактора; в игре приложение её выключает
+    bool drawGrid = true;
 
     // Helpers for Engine
     void createBuffer(VkDeviceSize s, VkBufferUsageFlags u, VmaMemoryUsage vmaUsage, VkBuffer& b, VmaAllocation& a);

@@ -2,9 +2,6 @@
 #include "Renderer.h"
 #include "Scene.h"
 #include "Settings.h"
-#include "MathUtils.h"
-#include "EditorUI.h"
-#include "Game.h"
 #include <stdexcept>
 #include <algorithm>
 #include <cstring>
@@ -731,6 +728,12 @@ void Renderer::endOneShot(VkCommandBuffer cb) {
     vkFreeCommandBuffers(device, commandPool, 1, &cb);
 }
 
+void uiNewFrame() {
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+}
+
 // =================================================================
 // --- Frame ---
 // =================================================================
@@ -803,7 +806,7 @@ Renderer::FramePlan Renderer::planFrame(FrameUBO& ubo) {
     ubo = FrameUBO{};
     ubo.camToWorld = glm::inverse(view);
     ubo.viewParams = vec4(0, 0, getCameraFocalLength(), 0);
-    int flags = (gfx.ao ? FLAG_AO : 0) | (editorCfg.showGrid && !isPlayMode() ? FLAG_GRID : 0) | (gfx.lightShadows ? FLAG_LIGHT_SHADOWS : 0);
+    int flags = (gfx.ao ? FLAG_AO : 0) | (drawGrid ? FLAG_GRID : 0) | (gfx.lightShadows ? FLAG_LIGHT_SHADOWS : 0);
     ubo.counts = glm::ivec4((int)gpuObjectCache.size(), (int)gpuLightCache.size(), currentShadingMode, flags);
     ubo.quality = glm::ivec4(gfx.maxSteps, gfx.shadowMode, gfx.shadowSteps, gfx.bounces);
     ubo.sunDir = vec4(sunDirection(world), world.sunIntensity);
@@ -1031,7 +1034,7 @@ void Renderer::initImGui(GLFWwindow* window) {
     pool_info.poolSizeCount = 1; pool_info.pPoolSizes = pool_sizes;
     vkCheck(vkCreateDescriptorPool(device, &pool_info, nullptr, &imguiDescriptorPool), "vkCreateDescriptorPool");
 
-    IMGUI_CHECKVERSION(); ImGui::CreateContext(); setupImGuiStyle();
+    IMGUI_CHECKVERSION(); ImGui::CreateContext();
     ImGui_ImplGlfw_InitForVulkan(window, true);
     ImGui_ImplVulkan_InitInfo init_info = {};
     init_info.Instance = instance; init_info.PhysicalDevice = physicalDevice; init_info.Device = device;

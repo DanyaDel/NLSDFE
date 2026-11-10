@@ -22,3 +22,7 @@ void startPlay(GLFWwindow* window);
 void stopPlay(GLFWwindow* window);
 void updatePlay(GLFWwindow* window, float deltaTime);
 CameraBasis getPlayCameraBasis();
+
+// Интерфейс поверх игры (ImGui-кадр уже начат, ImGui::Render вызывает приложение)
+void drawPlayHud();
+void drawToast();

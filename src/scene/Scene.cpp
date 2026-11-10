@@ -1,6 +1,5 @@
 #include "Scene.h"
 #include "MathUtils.h"
-#include "EngineExports.h"
 #include <fstream>
 #include <algorithm>
 #include <numeric>
@@ -537,6 +536,8 @@ void applyMaterialPreset(SceneNode& node, const MaterialPreset& preset) {
 // Всё новое (имена, локальные трансформации, компоненты, мир) лежит
 // в блоке расширения "NOSX" после миниатюры.
 // =================================================================
+std::function<int(const std::string&)> g_meshLoader;
+
 namespace {
     const uint32_t NOS_VERSION = 200;
     const uint32_t NOSX_VERSION = 1;
@@ -666,7 +667,7 @@ bool loadScene(const std::string& path, bool append) {
             std::error_code ec;
             std::filesystem::path beside = std::filesystem::path(path).parent_path() / std::filesystem::path(n.meshPath).filename();
             if (!std::filesystem::exists(n.meshPath, ec) && std::filesystem::exists(beside, ec)) n.meshPath = beside.string();
-            n.meshIdx = Engine_GetOrLoadMesh(n.meshPath);
+            n.meshIdx = g_meshLoader ? g_meshLoader(n.meshPath) : -1;
         }
     }
 
