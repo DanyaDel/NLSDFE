@@ -619,6 +619,21 @@ static void renderInspector() {
         for (int k = 0; k < 3; k++) if (std::abs(node.localScale[k]) < 0.001f) node.localScale[k] = 0.001f;
     }
 
+    if (isSdf && !node.isTrigger && ImGui::CollapsingHeader("Rigid Body", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const char* bodyTypes[] = { "Static (world geometry)", "Dynamic" };
+        int bodyType = node.body.type;
+        if (ImGui::Combo("Body", &bodyType, bodyTypes, BODY_TYPE_COUNT)) { saveUndo(); node.body.type = bodyType; }
+        if (node.body.type == BODY_DYNAMIC) {
+            ImGui::DragFloat("Mass", &node.body.mass, 0.05f, 0.01f, 1000.0f, "%.2f kg"); undoOnEdit();
+            ImGui::SliderFloat("Bounciness", &node.body.restitution, 0.0f, 1.0f); undoOnEdit();
+            ImGui::SliderFloat("Friction", &node.body.friction, 0.0f, 1.5f); undoOnEdit();
+            ImGui::DragFloat("Linear damping", &node.body.linearDamping, 0.01f, 0.0f, 10.0f); undoOnEdit();
+            ImGui::DragFloat("Angular damping", &node.body.angularDamping, 0.01f, 0.0f, 10.0f); undoOnEdit();
+            ImGui::DragFloat("Gravity scale", &node.body.gravityScale, 0.05f, -5.0f, 5.0f); undoOnEdit();
+            ImGui::TextDisabled("Collider: this node's shape. Simulated in Play Mode.");
+        }
+    }
+
     if (ImGui::CollapsingHeader("Logic (Play Mode)")) {
         const char* behaviors[] = { "None", "Rotate", "Ping-Pong" };
         int behavior = node.behavior;

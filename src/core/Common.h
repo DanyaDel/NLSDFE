@@ -107,6 +107,40 @@ struct GpuLight {
 enum BehaviorType { BEHAVIOR_NONE = 0, BEHAVIOR_ROTATE, BEHAVIOR_PINGPONG, BEHAVIOR_COUNT };
 enum TriggerAction { TRIGGER_TOGGLE_VISIBLE = 0, TRIGGER_START_BEHAVIOR, TRIGGER_STOP_BEHAVIOR, TRIGGER_TOGGLE_BEHAVIOR, TRIGGER_ACTION_COUNT };
 
+// --- Компоненты узла ---
+enum BodyType { BODY_STATIC = 0, BODY_DYNAMIC, BODY_TYPE_COUNT };
+
+// Твёрдое тело. Коллайдер — SDF-примитив самого узла; дочерние узлы едут следом без коллизий.
+// Статические узлы — это просто геометрия мира: любое SDF-тело без компонента уже препятствие.
+struct RigidBody {
+    int type = BODY_STATIC;
+    float mass = 1.0f;
+    float restitution = 0.2f;      // Упругость отскока
+    float friction = 0.5f;
+    float linearDamping = 0.05f;
+    float angularDamping = 0.1f;
+    float gravityScale = 1.0f;
+    vec3 velocity = {0, 0, 0};
+    vec3 angularVelocity = {0, 0, 0};
+    bool sleeping = false;         // Неподвижные тела не считаются, пока их не потревожат
+    float sleepTimer = 0.0f;
+};
+
+// Значение переменной скрипта, заданное в инспекторе
+enum ScriptVarType { SVAR_FLOAT = 0, SVAR_INT, SVAR_BOOL, SVAR_VEC3, SVAR_STRING, SVAR_NODE };
+struct ScriptVar {
+    std::string name;
+    int type = SVAR_FLOAT;
+    vec3 value = {0, 0, 0};   // float/int/bool лежат в x
+    std::string text;
+    int node = -1;
+};
+
+struct ScriptRef {
+    std::string path;              // Файл .nls; пусто — скрипта нет
+    std::vector<ScriptVar> vars;
+};
+
 struct SceneNode {
     std::string name;
     vec3 localPosition = {0, 0, 0};
@@ -136,6 +170,9 @@ struct SceneNode {
     bool isTrigger = false;
     int triggerTarget = -1;
     int triggerAction = TRIGGER_TOGGLE_VISIBLE;
+
+    RigidBody body;
+    ScriptRef script;
 
     SceneNode() {
         gpuData.invRotation = mat4(1.0f);

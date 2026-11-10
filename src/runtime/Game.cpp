@@ -1,5 +1,6 @@
 #include "Game.h"
 #include "Scene.h"
+#include "Physics.h"
 #include "Settings.h"
 #include "Renderer.h"
 #include "imgui.h"
@@ -13,9 +14,7 @@ namespace {
     std::vector<int> savedSelection;
     std::vector<vec3> basePositions;
     std::vector<float> phases;
-    std::vector<bool> insideTrigger;
 
-    const float GRAVITY = 18.0f;
     const float JUMP_SPEED = 6.5f;
     const float WALK_SPEED = 4.0f;
     const float RUN_SPEED = 7.5f;
@@ -65,18 +64,6 @@ namespace {
         }
     }
 
-    void updateTriggers() {
-        vec3 body = play.pos + vec3(0, PLAYER_EYE_HEIGHT * 0.5f, 0);
-        for (int i = 0; i < (int)sceneGraph.size(); i++) {
-            const SceneNode& node = sceneGraph[i];
-            if (!node.isTrigger || !node.worldActive) { insideTrigger[i] = false; continue; }
-            vec3 local = mat3(node.gpuData.invRotation) * (body - vec3(node.gpuData.position));
-            vec3 half = std::abs(node.gpuData.params.x) * vec3(node.gpuData.scale);
-            bool inside = std::abs(local.x) <= half.x && std::abs(local.y) <= half.y && std::abs(local.z) <= half.z;
-            if (inside && !insideTrigger[i]) applyTrigger(node);
-            insideTrigger[i] = inside;
-        }
-    }
 }
 
 bool isPlayMode() { return play.active; }
@@ -106,7 +93,8 @@ void startPlay(GLFWwindow* window) {
     basePositions.clear();
     for (const auto& n : sceneGraph) basePositions.push_back(n.localPosition);
     phases.assign(sceneGraph.size(), 0.0f);
-    insideTrigger.assign(sceneGraph.size(), false);
+    physics::reset();
+    for (auto& n : sceneGraph) { n.body.sleeping = false; n.body.sleepTimer = 0.0f; }
 
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     if (glfwRawMouseMotionSupported()) glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
@@ -156,11 +144,14 @@ void updatePlay(GLFWwindow* window, float deltaTime) {
 
     if (play.grounded && glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) { play.vel.y = JUMP_SPEED; play.grounded = false; }
 
+    // Физике игрок виден как две сферы, движущиеся с желаемой скоростью (до упора в стены)
+    vec3 pushVelocity = play.vel;
+
     // Несколько подшагов, чтобы не пролетать сквозь тонкие стены
     const int substeps = 3;
     float h = dt / substeps;
     for (int s = 0; s < substeps; s++) {
-        play.vel.y -= GRAVITY * h;
+        play.vel += physics::gravity * h;
         play.pos += play.vel * h;
         bool ground = resolveSphere(vec3(0.0f));
         resolveSphere(vec3(0, PLAYER_EYE_HEIGHT, 0));
@@ -169,7 +160,16 @@ void updatePlay(GLFWwindow* window, float deltaTime) {
 
     if (play.pos.y < KILL_HEIGHT) { play.pos = play.spawn; play.vel = vec3(0); }
 
-    updateTriggers();
+    std::vector<physics::KinematicSphere> spheres = {
+        { play.pos, PLAYER_RADIUS, pushVelocity, physics::PLAYER_ID },
+        { play.pos + vec3(0, PLAYER_EYE_HEIGHT, 0), PLAYER_RADIUS, pushVelocity, physics::PLAYER_ID },
+    };
+    physics::Events events;
+    events.onTrigger = [](int trigger, int other, bool entered) {
+        if (entered && trigger >= 0 && trigger < (int)sceneGraph.size()) applyTrigger(sceneGraph[trigger]);
+    };
+    physics::step(dt, spheres, events);
+
     cameraOverrideBasis = getPlayCameraBasis();
 }
 

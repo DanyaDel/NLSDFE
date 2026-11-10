@@ -5,9 +5,11 @@ int g_testsRun = 0;
 int g_testsFailed = 0;
 
 void runSceneTests();
+void runPhysicsTests();
 
 int main() {
     runSceneTests();
+    runPhysicsTests();
     std::printf("\n%d checks, %d failed\n", g_testsRun, g_testsFailed);
     return g_testsFailed == 0 ? 0 : 1;
 }

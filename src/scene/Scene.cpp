@@ -228,6 +228,10 @@ void deleteSelectedObject() {
             for (int& c : node.children) if (c > idx) c--;
             if (node.triggerTarget == idx) node.triggerTarget = -1;
             else if (node.triggerTarget > idx) node.triggerTarget--;
+            for (auto& v : node.script.vars) {
+                if (v.node == idx) v.node = -1;
+                else if (v.node > idx) v.node--;
+            }
         }
     }
     selectedIndices.clear();
@@ -540,7 +544,7 @@ std::function<int(const std::string&)> g_meshLoader;
 
 namespace {
     const uint32_t NOS_VERSION = 200;
-    const uint32_t NOSX_VERSION = 1;
+    const uint32_t NOSX_VERSION = 2;   // 2: твёрдые тела и скрипты
 
     template <typename T> void writePod(std::ostream& f, const T& v) { f.write(reinterpret_cast<const char*>(&v), sizeof(T)); }
     template <typename T> bool readPod(std::istream& f, T& v) { f.read(reinterpret_cast<char*>(&v), sizeof(T)); return (bool)f; }
@@ -589,6 +593,16 @@ bool saveScene(const std::string& path, const std::vector<uint8_t>& thumbnailRgb
         writePod(file, (int32_t)node.triggerTarget); writePod(file, (int32_t)node.triggerAction);
         writePod(file, (int32_t)node.behavior); writePod(file, node.behaviorVec); writePod(file, node.behaviorSpeed);
         writePod(file, node.lightIntensity); writePod(file, node.lightRange);
+        // --- версия 2 ---
+        const RigidBody& b = node.body;
+        writePod(file, (int32_t)b.type); writePod(file, b.mass); writePod(file, b.restitution); writePod(file, b.friction);
+        writePod(file, b.linearDamping); writePod(file, b.angularDamping); writePod(file, b.gravityScale);
+        writeString(file, node.script.path);
+        writePod(file, (uint32_t)node.script.vars.size());
+        for (const auto& v : node.script.vars) {
+            writeString(file, v.name); writePod(file, (int32_t)v.type); writePod(file, v.value);
+            writeString(file, v.text); writePod(file, (int32_t)v.node);
+        }
     }
     writePod(file, world.sunAzimuth); writePod(file, world.sunElevation); writePod(file, world.sunIntensity);
     writePod(file, world.sunColor); writePod(file, world.skyTop); writePod(file, world.skyHorizon); writePod(file, world.ambient);
@@ -625,7 +639,7 @@ bool loadScene(const std::string& path, bool append) {
     char magic[4] = {};
     uint32_t extVersion = 0, extCount = 0;
     if (file.read(magic, 4) && strncmp(magic, "NOSX", 4) == 0 && readPod(file, extVersion) && readPod(file, extCount)
-        && extVersion == NOSX_VERSION && extCount == nodes.size()) {
+        && extVersion >= 1 && extVersion <= NOSX_VERSION && extCount == nodes.size()) {
         bool ok = true;
         for (auto& n : nodes) {
             uint8_t active = 1, isTrigger = 0, behaviorOn = 1;
@@ -636,6 +650,20 @@ bool loadScene(const std::string& path, bool append) {
               && readPod(file, target) && readPod(file, action)
               && readPod(file, behavior) && readPod(file, n.behaviorVec) && readPod(file, n.behaviorSpeed)
               && readPod(file, n.lightIntensity) && readPod(file, n.lightRange);
+            if (ok && extVersion >= 2) {
+                int32_t bodyType = 0; uint32_t varCount = 0;
+                RigidBody& b = n.body;
+                ok = readPod(file, bodyType) && readPod(file, b.mass) && readPod(file, b.restitution) && readPod(file, b.friction)
+                  && readPod(file, b.linearDamping) && readPod(file, b.angularDamping) && readPod(file, b.gravityScale)
+                  && readString(file, n.script.path) && readPod(file, varCount) && varCount <= 256;
+                b.type = std::clamp(bodyType, 0, (int)BODY_TYPE_COUNT - 1);
+                for (uint32_t v = 0; ok && v < varCount; v++) {
+                    ScriptVar var; int32_t type = 0, nodeRef = -1;
+                    ok = readString(file, var.name) && readPod(file, type) && readPod(file, var.value) && readString(file, var.text) && readPod(file, nodeRef);
+                    var.type = std::clamp(type, 0, (int)SVAR_NODE); var.node = nodeRef;
+                    n.script.vars.push_back(var);
+                }
+            }
             if (!ok) break;
             n.active = active != 0; n.isTrigger = isTrigger != 0; n.behaviorOn = behaviorOn != 0;
             n.triggerTarget = target;
@@ -662,6 +690,7 @@ bool loadScene(const std::string& path, bool append) {
     for (auto& n : nodes) {
         if (n.parent < -1 || n.parent >= count) n.parent = -1;
         if (n.triggerTarget < -1 || n.triggerTarget >= count) n.triggerTarget = -1;
+        for (auto& v : n.script.vars) if (v.node < -1 || v.node >= count) v.node = -1;
         if (!n.meshPath.empty()) {
             // Меш мог переехать вместе со сценой (экспортированная игра) — ищем его рядом с .nos
             std::error_code ec;
@@ -679,6 +708,7 @@ bool loadScene(const std::string& path, bool append) {
         for (auto& n : nodes) {
             if (n.parent >= 0) n.parent += base;
             if (n.triggerTarget >= 0) n.triggerTarget += base;
+            for (auto& v : n.script.vars) if (v.node >= 0) v.node += base;
             sceneGraph.push_back(n);
             selectedIndices.push_back((int)sceneGraph.size() - 1);
         }
@@ -695,6 +725,7 @@ bool loadScene(const std::string& path, bool append) {
         for (auto& n : nodes) {
             if (n.parent >= MAX_OBJECTS) n.parent = -1;
             if (n.triggerTarget >= MAX_OBJECTS) n.triggerTarget = -1;
+            for (auto& v : n.script.vars) if (v.node >= MAX_OBJECTS) v.node = -1;
         }
     }
     sceneGraph = std::move(nodes);
