@@ -1,10 +1,12 @@
 #include "Game.h"
 #include "Scene.h"
 #include "Physics.h"
+#include "ScriptSystem.h"
 #include "Settings.h"
 #include "Renderer.h"
 #include "imgui.h"
 #include <algorithm>
+#include <map>
 
 PlayState play;
 
@@ -14,6 +16,53 @@ namespace {
     std::vector<int> savedSelection;
     std::vector<vec3> basePositions;
     std::vector<float> phases;
+    vec3 savedGravity;
+
+    // --- Ввод для скриптов: клавиши по именам ---
+    GLFWwindow* inputWindow = nullptr;
+    std::map<std::string, int> keyNames;
+    std::map<int, bool> keysNow, keysBefore;
+
+    void buildKeyNames() {
+        if (!keyNames.empty()) return;
+        for (char c = 'a'; c <= 'z'; c++) keyNames[std::string(1, c)] = GLFW_KEY_A + (c - 'a');
+        for (char c = '0'; c <= '9'; c++) keyNames[std::string(1, c)] = GLFW_KEY_0 + (c - '0');
+        keyNames["space"] = GLFW_KEY_SPACE; keyNames["shift"] = GLFW_KEY_LEFT_SHIFT; keyNames["ctrl"] = GLFW_KEY_LEFT_CONTROL;
+        keyNames["alt"] = GLFW_KEY_LEFT_ALT; keyNames["enter"] = GLFW_KEY_ENTER; keyNames["tab"] = GLFW_KEY_TAB;
+        keyNames["up"] = GLFW_KEY_UP; keyNames["down"] = GLFW_KEY_DOWN; keyNames["left"] = GLFW_KEY_LEFT; keyNames["right"] = GLFW_KEY_RIGHT;
+        // Кнопки мыши: отрицательные коды, чтобы не пересекаться с клавишами
+        keyNames["mouse1"] = -1; keyNames["mouse2"] = -2; keyNames["mouse3"] = -3;
+    }
+
+    bool rawKeyDown(int code) {
+        if (!inputWindow) return false;
+        if (code < 0) return glfwGetMouseButton(inputWindow, -code - 1) == GLFW_PRESS;
+        return glfwGetKey(inputWindow, code) == GLFW_PRESS;
+    }
+
+    int keyCode(const std::string& name) {
+        std::string lower = name;
+        for (char& c : lower) c = (char)std::tolower((unsigned char)c);
+        auto it = keyNames.find(lower);
+        return it == keyNames.end() ? 0 : it->second;
+    }
+
+    void pollKeys() {
+        keysBefore = keysNow;
+        for (const auto& [name, code] : keyNames) keysNow[code] = rawKeyDown(code);
+    }
+
+    void connectScriptHost(GLFWwindow* window) {
+        inputWindow = window;
+        buildKeyNames();
+        keysNow.clear(); keysBefore.clear();
+        nls::host.time = 0.0f;
+        nls::host.delta = 0.0f;
+        nls::host.keyDown = [](const std::string& key) { int code = keyCode(key); return code != 0 && keysNow[code]; };
+        nls::host.keyPressed = [](const std::string& key) { int code = keyCode(key); return code != 0 && keysNow[code] && !keysBefore[code]; };
+        nls::host.playerPosition = []() { return play.pos + vec3(0, PLAYER_EYE_HEIGHT, 0); };
+        nls::host.setPlayerPosition = [](vec3 p) { play.pos = p - vec3(0, PLAYER_EYE_HEIGHT, 0); play.vel = vec3(0.0f); };
+    }
 
     const float JUMP_SPEED = 6.5f;
     const float WALK_SPEED = 4.0f;
@@ -47,8 +96,8 @@ namespace {
                 case TRIGGER_STOP_BEHAVIOR: target.behaviorOn = false; break;
                 case TRIGGER_TOGGLE_BEHAVIOR: target.behaviorOn = !target.behaviorOn; break;
             }
+            showToast("Trigger: " + trigger.name);
         }
-        showToast("Trigger: " + trigger.name);
     }
 
     void updateBehaviors(float dt) {
@@ -58,6 +107,8 @@ namespace {
             if (node.behavior == BEHAVIOR_ROTATE) {
                 node.localRotation += node.behaviorVec * node.behaviorSpeed * dt;
             } else if (node.behavior == BEHAVIOR_PINGPONG) {
+                // Узлы, созданные скриптом во время игры, получают базу в момент появления
+                while ((int)basePositions.size() <= i) { basePositions.push_back(sceneGraph[basePositions.size()].localPosition); phases.push_back(0.0f); }
                 phases[i] += node.behaviorSpeed * dt;
                 node.localPosition = basePositions[i] + node.behaviorVec * (0.5f - 0.5f * std::cos(phases[i]));
             }
@@ -94,7 +145,10 @@ void startPlay(GLFWwindow* window) {
     for (const auto& n : sceneGraph) basePositions.push_back(n.localPosition);
     phases.assign(sceneGraph.size(), 0.0f);
     physics::reset();
+    savedGravity = physics::gravity;
     for (auto& n : sceneGraph) { n.body.sleeping = false; n.body.sleepTimer = 0.0f; }
+    connectScriptHost(window);
+    nls::scripts.start();
 
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     if (glfwRawMouseMotionSupported()) glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
@@ -109,6 +163,8 @@ void stopPlay(GLFWwindow* window) {
     if (!play.active) return;
     play.active = false;
     cameraOverride = false;
+    nls::scripts.stop();
+    physics::gravity = savedGravity;
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     if (play.standalone) { glfwSetWindowShouldClose(window, GLFW_TRUE); return; }
     sceneGraph = savedScene;
@@ -127,6 +183,11 @@ void updatePlay(GLFWwindow* window, float deltaTime) {
     play.pitch = std::clamp(play.pitch - (float)(my - play.lastMouseY) * 0.0025f, -1.5f, 1.5f);
     play.lastMouseX = mx; play.lastMouseY = my;
 
+    // Скрипты и встроенные поведения
+    pollKeys();
+    nls::host.time += dt;
+    nls::host.delta = dt;
+    nls::scripts.update(dt);
     updateBehaviors(dt);
 
     // Движение в горизонтальной плоскости
@@ -165,10 +226,13 @@ void updatePlay(GLFWwindow* window, float deltaTime) {
         { play.pos + vec3(0, PLAYER_EYE_HEIGHT, 0), PLAYER_RADIUS, pushVelocity, physics::PLAYER_ID },
     };
     physics::Events events;
+    events.onCollide = [](int self, int other, vec3, vec3, float) { nls::scripts.onCollide(self, other); };
     events.onTrigger = [](int trigger, int other, bool entered) {
-        if (entered && trigger >= 0 && trigger < (int)sceneGraph.size()) applyTrigger(sceneGraph[trigger]);
+        if (trigger < 0 || trigger >= (int)sceneGraph.size()) return;
+        if (entered) applyTrigger(sceneGraph[trigger]);
+        nls::scripts.onTrigger(trigger, other, entered);
     };
-    physics::step(dt, spheres, events);
+    physics::step(dt, spheres, events, [](float h) { nls::scripts.fixedUpdate(h); });
 
     cameraOverrideBasis = getPlayCameraBasis();
 }

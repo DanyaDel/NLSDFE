@@ -11,6 +11,7 @@
 #include "Scene.h"
 #include "Settings.h"
 #include "Game.h"
+#include "ScriptSystem.h"
 #include "Renderer.h"
 #include "App.h"
 #include "imgui.h"
@@ -46,6 +47,7 @@ public:
         if (firstRun && opts.preset < 0) applyFirstRunPreset();
         ImGui::GetIO().IniFilename = nullptr;   // Игре незачем писать imgui.ini
 
+        nls::scripts.rootDir = fs::path(scene).parent_path().string();   // Скрипты лежат рядом со сценой
         if (!loadScene(scene, false)) throw std::runtime_error("Cannot load scene: " + scene);
         glfwSetWindowTitle(window, fs::path(scene).stem().string().c_str());
         currentShadingMode = SHADING_RENDERED;

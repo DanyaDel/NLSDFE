@@ -107,6 +107,18 @@ add_library(nls_physics STATIC src/physics/Physics.cpp)
 target_include_directories(nls_physics PUBLIC src/physics)
 target_link_libraries(nls_physics PUBLIC nls_scene)
 
+# script: язык NLS (компилятор, VM) и привязки к движку
+add_library(nls_script STATIC
+    src/script/Lexer.cpp
+    src/script/Parser.cpp
+    src/script/Compiler.cpp
+    src/script/VM.cpp
+    src/script/Bindings.cpp
+    src/script/ScriptSystem.cpp
+)
+target_include_directories(nls_script PUBLIC src/script)
+target_link_libraries(nls_script PUBLIC nls_scene nls_physics)
+
 # render: Vulkan-рендерер и ImGui
 add_library(nls_render STATIC src/render/Renderer.cpp)
 target_include_directories(nls_render PUBLIC src/render)
@@ -115,7 +127,7 @@ target_link_libraries(nls_render PUBLIC nls_scene imgui ${NLS_VULKAN_LIBS} glfw)
 # runtime: окно, игровой цикл, игрок
 add_library(nls_runtime STATIC src/runtime/App.cpp src/runtime/Game.cpp)
 target_include_directories(nls_runtime PUBLIC src/runtime)
-target_link_libraries(nls_runtime PUBLIC nls_render nls_physics)
+target_link_libraries(nls_runtime PUBLIC nls_render nls_physics nls_script)
 
 # Редактор
 add_executable(SDF_Engine
@@ -133,8 +145,8 @@ add_executable(NLSDFE_Player src/app/player_main.cpp)
 target_link_libraries(NLSDFE_Player PRIVATE nls_runtime)
 
 # Тесты без окна и GPU
-add_executable(nls_tests tests/tests_main.cpp tests/test_scene.cpp tests/test_physics.cpp)
-target_link_libraries(nls_tests PRIVATE nls_scene nls_physics)
+add_executable(nls_tests tests/tests_main.cpp tests/test_scene.cpp tests/test_physics.cpp tests/test_script.cpp)
+target_link_libraries(nls_tests PRIVATE nls_scene nls_physics nls_script)
 enable_testing()
 add_test(NAME nls_tests COMMAND nls_tests)
 

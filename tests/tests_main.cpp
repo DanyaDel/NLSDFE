@@ -6,10 +6,12 @@ int g_testsFailed = 0;
 
 void runSceneTests();
 void runPhysicsTests();
+void runScriptTests();
 
 int main() {
     runSceneTests();
     runPhysicsTests();
+    runScriptTests();
     std::printf("\n%d checks, %d failed\n", g_testsRun, g_testsFailed);
     return g_testsFailed == 0 ? 0 : 1;
 }
