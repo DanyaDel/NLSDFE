@@ -1,67 +1,78 @@
 #version 450
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 8, local_size_y = 8) in;
 
-layout(binding = 0) uniform writeonly image2D resultImage;
-layout(binding = 2) uniform writeonly image2D sdfDepthImage;
+// Явные форматы: фича shaderStorageImageWriteWithoutFormat больше не нужна
+layout(binding = 0, rgba8) uniform writeonly image2D resultImage;
+layout(binding = 2, r32f) uniform writeonly image2D sdfDepthImage;
 
-layout(push_constant) uniform PushConsts {
-    mat4 camToWorld;
-    vec2 resolution;
-    float time;
-    int draggingAxis;
-    int objectCount;
-    int selectedIndex;
-    int mode; // 0=Move, 1=Rotate, 2=Scale
-    float uiMinX, uiMinY, uiMaxX, uiMaxY;
-    int shadingMode; // 0=Wire, 1=Solid, 2=Material, 3=Rendered
-    vec3 gizmoPos;   // Центр выделения (передается из CPU)
-    float focalLength; // FOV sync
-} pc;
-
+// Должно совпадать с GpuObject в Common.h
 struct Object {
-    mat4 invRotation; 
-    vec4 position;    
-    vec4 scale;       
-    vec4 params;      
-    vec4 color;       
-    vec4 rotationEuler; 
+    vec4 rot0;   // столбцы обратного поворота; w = тип
+    vec4 rot1;   // w = CSG-операция
+    vec4 rot2;   // w = сглаживание
+    vec4 pos;    // xyz, w = размер
+    vec4 scale;  // xyz, w = доп. параметр формы
+    vec4 color;  // rgb, w = roughness
+    vec4 bound;  // xyz = полуразмеры ограничивающего бокса, w = metallic
+    vec4 extra;  // x = выделен
 };
 
 layout(std430, binding = 1) readonly buffer ObjectBuffer {
     Object objects[];
 } scene;
 
+// Должно совпадать с FrameUBO в Renderer.h
+layout(std140, binding = 3) uniform Frame {
+    mat4 camToWorld;
+    vec4 viewParams;   // xy = разрешение рендера, z = focal length
+    ivec4 counts;      // x = объекты, y = источники света, z = shading mode, w = флаги
+    ivec4 quality;     // x = шаги марша, y = режим теней, z = шаги теней, w = отскоки
+    vec4 sunDir;       // xyz = направление на солнце, w = интенсивность
+    vec4 sunColor;     // rgb, w = сила окружающего света
+    vec4 skyTop;
+    vec4 skyHorizon;
+    vec4 lightPos[8];  // xyz, w = радиус действия
+    vec4 lightCol[8];  // rgb * интенсивность
+} u;
+
+const int FLAG_AO = 1;
+const int FLAG_GRID = 2;
+const int FLAG_LIGHT_SHADOWS = 4;
+
+const int MODE_WIRE = 0;
+const int MODE_SOLID = 1;
+const int MODE_MATERIAL = 2;
+const int MODE_RENDERED = 3;
+
 // =================================================================
 // --- Utilities ---
 // =================================================================
-float rand(vec2 xy) {
-    return fract(tan(distance(xy * 1.61803398874989484820459, xy) * pc.time) * xy.x);
+float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
 }
 
 // =================================================================
 // --- SDF Primitives ---
 // =================================================================
-float sdSphere(vec3 p, float s) { return length(p) - s; }
-float sdBox(vec3 p, vec3 b) { 
-    vec3 q = abs(p) - b; 
-    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0); 
+float sdBox(vec3 p, vec3 b) {
+    vec3 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
 }
 float sdCylinder(vec3 p, float h, float r) {
-  vec2 d = abs(vec2(length(p.xz),p.y)) - vec2(r,h);
-  return min(max(d.x,d.y),0.0) + length(max(d,0.0));
+    vec2 d = abs(vec2(length(p.xz), p.y)) - vec2(r, h);
+    return min(max(d.x, d.y), 0.0) + length(max(d, 0.0));
 }
 float sdCone(vec3 p, float h, float r1, float r2) {
-    vec2 q = vec2( length(p.xz), p.y );
-    vec2 k1 = vec2(r2,h);
-    vec2 k2 = vec2(r2-r1,2.0*h);
-    vec2 ca = vec2(q.x-min(q.x,(q.y < 0.0)?r1:r2), abs(q.y)-h);
-    vec2 cb = q - k1 + k2*clamp( dot(k1-q,k2)/dot(k2,k2), 0.0, 1.0 );
+    vec2 q = vec2(length(p.xz), p.y);
+    vec2 k1 = vec2(r2, h);
+    vec2 k2 = vec2(r2 - r1, 2.0 * h);
+    vec2 ca = vec2(q.x - min(q.x, (q.y < 0.0) ? r1 : r2), abs(q.y) - h);
+    vec2 cb = q - k1 + k2 * clamp(dot(k1 - q, k2) / dot(k2, k2), 0.0, 1.0);
     float s = (cb.x < 0.0 && ca.y < 0.0) ? -1.0 : 1.0;
-    return s*sqrt( min(dot(ca,ca),dot(cb,cb)) );
+    return s * sqrt(min(dot(ca, ca), dot(cb, cb)));
 }
-float sdRingX(vec3 p, float r, float th) { return length(vec2(length(p.yz) - r, p.x)) - th; }
-float sdRingY(vec3 p, float r, float th) { return length(vec2(length(p.xz) - r, p.y)) - th; }
-float sdRingZ(vec3 p, float r, float th) { return length(vec2(length(p.xy) - r, p.z)) - th; }
 
 // =================================================================
 // --- CSG Operations ---
@@ -82,99 +93,149 @@ vec2 opSmoothIntersect(vec2 d1, vec2 d2, float k) {
 // =================================================================
 // --- Scene Logic ---
 // =================================================================
-vec2 mapScene(vec3 p) {
-    vec2 globalRes = vec2(100.0, -1.0);
-    for(int i = 0; i < pc.objectCount; i++) {
-        vec3 pos = scene.objects[i].position.xyz;
-        vec3 rawScl = scene.objects[i].scale.xyz;
-        vec3 absScl = abs(rawScl);
-        float size = scene.objects[i].params.x;
-        int type = int(scene.objects[i].position.w);
-        if (type < 0) continue; 
 
-        vec3 localP = p - pos;
-        localP = (scene.objects[i].invRotation * vec4(localP, 1.0)).xyz;
+// Какие объекты луч вообще может задеть и на каком отрезке.
+// Строится один раз на луч, дальше mapScene обходит только эти объекты.
+struct RayMask {
+    uvec4 bits;
+    float tNear;
+    float tFar;
+};
 
-        float d = 0.0;
-        if (type == 0) { // Sphere
-            float minScale = min(absScl.x, min(absScl.y, absScl.z));
-            d = sdSphere(localP / rawScl, size) * minScale; 
-        } 
-        else if (type == 1) { // Box
-            d = sdBox(localP, vec3(size) * absScl);
-        }
-
-        vec2 currentObj = vec2(d, float(i));
-        int op = int(scene.objects[i].params.y);
-        float smoothK = max(scene.objects[i].params.z, 0.001);
-
-        if (i == 0) globalRes = currentObj;
-        else {
-            if (op == 0) globalRes = opSmoothUnion(globalRes, currentObj, smoothK); 
-            else if (op == 1) globalRes = opSmoothSub(currentObj, globalRes, smoothK);
-            else if (op == 2) globalRes = opSmoothIntersect(globalRes, currentObj, smoothK); 
+RayMask buildMask(vec3 ro, vec3 rd, float tMax, float pad) {
+    RayMask m;
+    m.bits = uvec4(0u);
+    m.tNear = tMax;
+    m.tFar = 0.0;
+    for (int i = 0; i < u.counts.x; i++) {
+        mat3 rot = mat3(scene.objects[i].rot0.xyz, scene.objects[i].rot1.xyz, scene.objects[i].rot2.xyz);
+        vec3 lro = rot * (ro - scene.objects[i].pos.xyz);
+        vec3 lrd = rot * rd;
+        lrd = mix(lrd, vec3(1e-6), lessThan(abs(lrd), vec3(1e-6)));
+        vec3 b = scene.objects[i].bound.xyz + pad;
+        vec3 inv = 1.0 / lrd;
+        vec3 t0 = (-b - lro) * inv;
+        vec3 t1 = (b - lro) * inv;
+        vec3 tLo = min(t0, t1);
+        vec3 tHi = max(t0, t1);
+        float tn = max(max(tLo.x, tLo.y), tLo.z);
+        float tf = min(min(tHi.x, tHi.y), tHi.z);
+        if (tf >= max(tn, 0.0) && tn < tMax) {
+            m.bits[i >> 5] |= 1u << uint(i & 31);
+            m.tNear = min(m.tNear, max(tn, 0.0));
+            m.tFar = max(m.tFar, min(tf, tMax));
         }
     }
-    return globalRes;
+    return m;
 }
 
-vec3 getNormal(vec3 p, float t) {
-    float eps = 0.0005 * t; 
+bool maskEmpty(RayMask m) { return all(equal(m.bits, uvec4(0u))); }
+
+float sdObject(int i, vec3 p) {
+    mat3 rot = mat3(scene.objects[i].rot0.xyz, scene.objects[i].rot1.xyz, scene.objects[i].rot2.xyz);
+    vec3 q = rot * (p - scene.objects[i].pos.xyz);
+    vec3 scl = scene.objects[i].scale.xyz;
+    float size = scene.objects[i].pos.w;
+    int type = int(scene.objects[i].rot0.w);
+    if (type == 1) return sdBox(q, size * scl);
+
+    float minScale = min(scl.x, min(scl.y, scl.z));
+    vec3 v = q / scl;
+    float p2 = scene.objects[i].scale.w;
+    float d;
+    if (type == 2) d = sdCylinder(v, size, size);
+    else if (type == 3) d = length(vec2(length(v.xz) - size, v.y)) - size * p2;
+    else if (type == 4) { v.y -= clamp(v.y, -size, size); d = length(v) - size * p2; }
+    else if (type == 5) d = sdCone(v, size, size, size * p2);
+    else d = length(v) - size;
+    return d * minScale;
+}
+
+vec2 mapScene(vec3 p, uvec4 mask) {
+    vec2 res = vec2(100.0, -1.0);
+    for (int w = 0; w < 4; w++) {
+        uint bits = mask[w];
+        while (bits != 0u) {
+            int i = (w << 5) + findLSB(bits);
+            bits &= bits - 1u;
+
+            vec2 cur = vec2(sdObject(i, p), float(i));
+            int op = (i == 0) ? 0 : int(scene.objects[i].rot1.w);
+            float k = scene.objects[i].rot2.w;
+            if (op == 0) res = opSmoothUnion(res, cur, k);
+            else if (op == 1) res = opSmoothSub(cur, res, k);
+            else res = opSmoothIntersect(res, cur, k);
+        }
+    }
+    return res;
+}
+
+vec3 getNormal(vec3 p, float t, uvec4 mask) {
+    float eps = max(0.0005 * t, 0.0002);
     vec2 k = vec2(1.0, -1.0);
     return normalize(
-        k.xyy * mapScene(p + k.xyy * eps).x + 
-        k.yyx * mapScene(p + k.yyx * eps).x + 
-        k.yxy * mapScene(p + k.yxy * eps).x + 
-        k.xxx * mapScene(p + k.xxx * eps).x
+        k.xyy * mapScene(p + k.xyy * eps, mask).x +
+        k.yyx * mapScene(p + k.yyx * eps, mask).x +
+        k.yxy * mapScene(p + k.yxy * eps, mask).x +
+        k.xxx * mapScene(p + k.xxx * eps, mask).x
     );
 }
 
-float calcAO(vec3 p, vec3 n) {
+float calcAO(vec3 p, vec3 n, uvec4 mask) {
     float occ = 0.0; float sca = 1.0;
-    for(int i = 0; i < 3; i++) {
+    for (int i = 0; i < 3; i++) {
         float h = 0.02 + 0.15 * float(i) / 2.0;
-        float d = mapScene(p + n * h).x;
+        float d = mapScene(p + n * h, mask).x;
         occ += (h - d) * sca; sca *= 0.8;
     }
     return clamp(1.0 - 2.5 * occ, 0.0, 1.0);
 }
 
-float calcSoftShadow(vec3 ro, vec3 rd, float tmin, float tmax, float k) {
-    float res = 1.0; 
-    float t = tmin + (rand(gl_GlobalInvocationID.xy) * 0.02); 
+// soft: полутень шириной k; иначе — жёсткая тень
+float calcShadow(vec3 ro, vec3 rd, float tMax, bool soft, float k) {
+    RayMask m = buildMask(ro, rd, tMax, soft ? 0.5 : 0.0);
+    if (maskEmpty(m)) return 1.0;
+
+    int steps = u.quality.z;
+    float t = max(m.tNear, 0.05);
+    if (!soft) {
+        float h = 1.0;
+        for (int i = 0; i < steps; i++) {
+            h = mapScene(ro + rd * t, m.bits).x;
+            if (h < 0.001) return 0.0;
+            t += h;
+            if (t > m.tFar) return 1.0;
+        }
+        // Шаги кончились у самой поверхности: луч скользит по объекту — считаем его тенью
+        return (h < 0.02) ? 0.0 : 1.0;
+    }
+
+    float res = 1.0;
     float ph = 1e10;
-    for(int i=0; i<32; i++) {
-        float h = mapScene(ro + rd*t).x;
-        float y = h*h/(2.0*ph);
-        float d = sqrt(h*h-y*y);
-        res = min(res, k*d/max(0.0, t-y));
-        ph = h; 
+    t += hash12(vec2(gl_GlobalInvocationID.xy)) * 0.02;
+    for (int i = 0; i < steps; i++) {
+        float h = mapScene(ro + rd * t, m.bits).x;
+        float y = h * h / (2.0 * ph);
+        float d = sqrt(max(h * h - y * y, 0.0));
+        res = min(res, k * d / max(0.0001, t - y));
+        ph = h;
         t += clamp(h, 0.01, 0.5);
-        if(res < 0.005 || t > tmax) break;
+        if (res < 0.005 || t > m.tFar) break;
     }
     return clamp(res, 0.0, 1.0);
 }
 
-float calcHardShadow(vec3 ro, vec3 rd, float tmax) {
-    float t = 0.05;
-    for(int i=0; i<64; i++) {
-        float h = mapScene(ro + rd*t).x;
-        if(h < 0.001) return 0.0;
-        t += h;
-        if(t > tmax) break;
-    }
-    return 1.0;
-}
-
-// PBR Functions
+// =================================================================
+// --- PBR ---
+// =================================================================
 float DistributionGGX(vec3 N, vec3 H, float roughness) {
-    float a = roughness*roughness; float a2 = a*a;
-    float NdotH = max(dot(N, H), 0.0); float NdotH2 = NdotH*NdotH;
-    float num = a2; float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-    return num / (3.14159 * denom * denom + 0.0001);
+    float a = roughness * roughness; float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0); float NdotH2 = NdotH * NdotH;
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    return a2 / (3.14159 * denom * denom + 0.0001);
 }
 float GeometrySchlickGGX(float NdotV, float roughness) {
-    float r = (roughness + 1.0); float k = (r*r) / 8.0;
+    float r = (roughness + 1.0); float k = (r * r) / 8.0;
     return NdotV / (NdotV * (1.0 - k) + k);
 }
 float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
@@ -188,283 +249,217 @@ vec3 calculatePBR(vec3 n, vec3 v, vec3 lightDir, vec3 albedo, float metallic, fl
     float NdotL = max(dot(n, lightDir), 0.0);
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
     vec3 F = fresnelSchlick(max(dot(h, v), 0.0), F0);
-    float NDF = DistributionGGX(n, h, roughness);   
-    float G = GeometrySmith(n, v, lightDir, roughness);    
-    vec3 num = NDF * G * F;
-    float denom = 4.0 * max(dot(n, v), 0.0) * NdotL + 0.001;
-    vec3 specular = num / denom;
+    float NDF = DistributionGGX(n, h, roughness);
+    float G = GeometrySmith(n, v, lightDir, roughness);
+    vec3 specular = NDF * G * F / (4.0 * max(dot(n, v), 0.0) * NdotL + 0.001);
     vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
-    return (kD * albedo / 3.14159 + specular) * NdotL * 2.8;
+    return (kD * albedo / 3.14159 + specular) * NdotL;
 }
 
 // =================================================================
-// --- Gizmo & Guide Definitions ---
+// --- Sky & Grid ---
 // =================================================================
-
-float sdArrow(vec3 p, float totalLen, float thick, float headLen, float headW) {
-    float bodyLen = totalLen - headLen;
-    float body = sdCylinder(p - vec3(0, bodyLen*0.5, 0), bodyLen*0.5, thick);
-    float head = sdCone(p - vec3(0, bodyLen + headLen*0.5, 0), headLen*0.5, headW, 0.0);
-    return min(body, head);
+vec3 skyColor(vec3 rd) {
+    vec3 col = mix(u.skyHorizon.rgb, u.skyTop.rgb, pow(clamp(rd.y, 0.0, 1.0), 0.5));
+    col = mix(col, u.skyHorizon.rgb * 0.35, clamp(-rd.y * 4.0, 0.0, 1.0));
+    float s = max(dot(rd, u.sunDir.xyz), 0.0);
+    col += u.sunColor.rgb * (pow(s, 800.0) * 6.0 + pow(s, 32.0) * 0.12) * min(u.sunDir.w, 4.0);
+    return col;
 }
 
-float sdScaleHandle(vec3 p, float totalLen, float thick, float cubeSize) {
-    float bodyLen = totalLen - cubeSize;
-    float body = sdCylinder(p - vec3(0, bodyLen*0.5, 0), bodyLen*0.5, thick);
-    float head = sdBox(p - vec3(0, bodyLen + cubeSize*0.5, 0), vec3(cubeSize*0.5));
-    return min(body, head);
+vec3 editorBackground(vec3 rd) {
+    return mix(vec3(0.15, 0.15, 0.2), vec3(0.05, 0.05, 0.1), rd.y * 0.5 + 0.5);
 }
 
-vec2 mapGizmo(vec3 p, vec3 ro) {
-    if (pc.selectedIndex < 0) return vec2(100.0, 0.0);
-    
-    // Используем переданный центр выделения, а не позицию отдельного объекта
-    vec3 center = pc.gizmoPos;
-    
-    float scale = length(ro - center) * 0.12; 
-    vec3 loc = p - center;
-    float minD = 10000.0; float axis = 0.0;
-    
-    if (pc.mode == 0) { // Move
-        float len = 1.3*scale; float th = 0.02*scale; float hL = 0.3*scale; float hW = 0.08*scale;
-        float dX = sdArrow(vec3(loc.y, loc.x, loc.z), len, th, hL, hW);
-        float dY = sdArrow(loc, len, th, hL, hW);
-        float dZ = sdArrow(vec3(loc.y, loc.z, loc.x), len, th, hL, hW);
-        // Центральный шар для перемещения во всех осях
-        float dC = length(loc) - 0.25*scale;
-        
-        minD = dX; axis = 1.0;
-        if (dY < minD) { minD = dY; axis = 2.0; }
-        if (dZ < minD) { minD = dZ; axis = 3.0; }
-        if (dC < minD) { minD = dC; axis = 4.0; } // 4.0 = Center Axis
-    } else if (pc.mode == 1) { // Rotate
-        float r = 1.0 * scale; float th = 0.02 * scale;
-        float dX = sdRingX(loc, r, th); float dY = sdRingZ(loc, r, th); float dZ = sdRingY(loc, r, th); 
-        minD = dX; axis = 1.0;
-        if (dY < minD) { minD = dY; axis = 2.0; }
-        if (dZ < minD) { minD = dZ; axis = 3.0; }
-    } else if (pc.mode == 2) { // Scale
-        float len = 1.3*scale; float th = 0.02*scale; float cubeS = 0.15*scale;
-        float dX = sdScaleHandle(vec3(loc.y, loc.x, loc.z), len, th, cubeS);
-        float dY = sdScaleHandle(loc, len, th, cubeS);
-        float dZ = sdScaleHandle(vec3(loc.y, loc.z, loc.x), len, th, cubeS);
-        float dC = length(loc) - 0.2*scale; 
-        minD = dX; axis = 1.0;
-        if (dY < minD) { minD = dY; axis = 2.0; }
-        if (dZ < minD) { minD = dZ; axis = 3.0; }
-        if (dC < minD) { minD = dC; axis = 4.0; }
-    }
-    return vec2(minD, axis);
+// Сетка на плоскости y = 0; rgb = цвет, a = непрозрачность
+vec4 gridOverlay(vec3 ro, vec3 rd, float tHit, float pixelAngle) {
+    if (abs(rd.y) < 1e-4) return vec4(0.0);
+    float tp = -ro.y / rd.y;
+    if (tp <= 0.0 || (tHit > 0.0 && tp > tHit)) return vec4(0.0);
+
+    vec3 pp = ro + rd * tp;
+    float fw = tp * pixelAngle / abs(rd.y);             // размер пикселя на плоскости
+    vec2 g = abs(fract(pp.xz - 0.5) - 0.5);             // расстояние до ближайшей линии
+    float line = 1.0 - smoothstep(fw * 0.5, fw * 1.5, min(g.x, g.y));
+
+    vec3 col = vec3(0.45);
+    float ax = 1.0 - smoothstep(fw, fw * 2.5, abs(pp.z));   // ось X
+    float az = 1.0 - smoothstep(fw, fw * 2.5, abs(pp.x));   // ось Z
+    col = mix(col, vec3(0.85, 0.25, 0.25), ax);
+    col = mix(col, vec3(0.25, 0.4, 0.9), az);
+    float alpha = max(line * 0.45, max(ax, az) * 0.9);
+    // Вдали клетки становятся мельче пикселя — плавно гасим, чтобы не было ряби
+    alpha *= clamp(0.12 / fw - 0.2, 0.0, 1.0) * exp(-tp * 0.02);
+    return vec4(col, alpha);
 }
 
-// SDF для бесконечной линии
-float mapGuideLine(vec3 p, vec3 center, int axis, float scale) {
-    vec3 q = p - center; 
-    // Делаем линию очень тонкой (0.005)
-    float thick = 0.005 * scale; 
-    
-    // Формула расстояния до бесконечной линии вдоль оси
-    if (axis == 1) return length(q.yz) - thick; // Линия вдоль X
-    if (axis == 2) return length(q.xz) - thick; // Линия вдоль Y
-    if (axis == 3) return length(q.xy) - thick; // Линия вдоль Z
-    return 1000.0;
-}
-
+// =================================================================
+// --- Main ---
+// =================================================================
 void main() {
     ivec2 texelCoord = ivec2(gl_GlobalInvocationID.xy);
-    
-    // UI Culling (не рисуем под интерфейсом)
-    if (float(texelCoord.x) >= pc.uiMinX && float(texelCoord.x) <= pc.uiMaxX &&
-        float(texelCoord.y) >= pc.uiMinY && float(texelCoord.y) <= pc.uiMaxY) {
-        imageStore(resultImage, texelCoord, vec4(0.1, 0.1, 0.1, 1.0)); 
-        return;
-    }
+    vec2 resolution = u.viewParams.xy;
+    if (texelCoord.x >= int(resolution.x) || texelCoord.y >= int(resolution.y)) return;
 
-    if(texelCoord.x >= pc.resolution.x || texelCoord.y >= pc.resolution.y) return;
-
-    vec2 uv = (vec2(texelCoord) * 2.0 - pc.resolution) / pc.resolution.y;
+    vec2 uv = ((vec2(texelCoord) + 0.5) * 2.0 - resolution) / resolution.y;
     uv.y = -uv.y;
 
-    vec3 ro = pc.camToWorld[3].xyz;
-    vec3 rd = mat3(pc.camToWorld) * normalize(vec3(uv, -pc.focalLength));
+    float focal = u.viewParams.z;
+    vec3 rdCam = normalize(vec3(uv, -focal));
+    vec3 ro = u.camToWorld[3].xyz;
+    vec3 rd = mat3(u.camToWorld) * rdCam;
+    vec3 camRo = ro;
+    vec3 camRd = rd;
 
-    // Авто-оптимизация: Если двигаем гизмо, принудительно включаем режим Solid (быстрее)
-    int effMode = pc.shadingMode;
-    if (pc.draggingAxis > 0) effMode = 1;
+    int mode = u.counts.z;
+    int flags = u.counts.w;
+    int maxSteps = u.quality.x;
+    int shadowMode = u.quality.y;
+    int maxBounces = (mode == MODE_RENDERED) ? u.quality.w : 1;
+    float pixelRadius = 1.0 / (resolution.y * 0.5);
+
+    vec3 sunDir = u.sunDir.xyz;
+    vec3 sunRadiance = u.sunColor.rgb * u.sunDir.w;
 
     vec3 finalColor = vec3(0.0);
     vec3 throughput = vec3(1.0);
     float firstHitT = -1.0;
-    
-    int maxBounces = (effMode == 3) ? 2 : 1; 
-    if (effMode == 0) maxBounces = 1;
 
-    // --- Рендеринг сцены ---
-    for(int bounce = 0; bounce < maxBounces; bounce++) {
-        float t = 0.1; float tMax = 100.0;
-        float pixelRadius = 1.0 / (pc.resolution.y * 0.5);
-        float objID = -1.0; bool hit = false;
-        
+    for (int bounce = 0; bounce < maxBounces; bounce++) {
+        float tMax = (bounce == 0) ? 100.0 : 40.0;
+        RayMask m = buildMask(ro, rd, tMax, 0.0);
+
+        float t = max(m.tNear, (bounce == 0) ? 0.1 : 0.02);
+        float objID = -1.0;
+        bool hit = false;
         int stepsTaken = 0;
-        for(int i=0; i<128; i++) {
-            stepsTaken++;
-            vec3 p = ro + rd * t;
-            vec2 res = mapScene(p);
-            float d = res.x;
-            if (abs(d) < (pixelRadius * t * 0.5)) { 
-                hit = true; objID = res.y; 
-                if(bounce == 0) firstHitT = t;
-                break; 
+
+        // Луч не задевает ни одного объекта — марш не нужен вовсе
+        if (!maskEmpty(m)) {
+            for (int i = 0; i < maxSteps; i++) {
+                stepsTaken++;
+                vec2 res = mapScene(ro + rd * t, m.bits);
+                if (abs(res.x) < (pixelRadius * t * 0.5)) {
+                    hit = true; objID = res.y;
+                    if (bounce == 0) firstHitT = t;
+                    break;
+                }
+                t += res.x;
+                if (t > m.tFar) break;
             }
-            if (t > tMax) break;
-            t += d;
         }
-        
+
         // WIREFRAME / HEATMAP
-        if (effMode == 0) {
+        if (mode == MODE_WIRE) {
             if (hit) {
-                float heat = float(stepsTaken) / 60.0;
+                float heat = float(stepsTaken) / float(maxSteps) * 2.0;
                 vec3 col = mix(vec3(0.1, 0.8, 0.2), vec3(0.9, 0.1, 0.1), clamp(heat, 0.0, 1.0));
-                vec3 p = ro + rd * t;
-                vec3 n = getNormal(p, t);
+                vec3 n = getNormal(ro + rd * t, t, m.bits);
                 float edge = 1.0 - abs(dot(n, -rd));
-                col = mix(col, vec3(1.0), pow(edge, 4.0));
-                finalColor = col;
+                finalColor = mix(col, vec3(1.0), pow(edge, 4.0));
             } else {
-                finalColor = vec3(0.15); 
+                finalColor = vec3(0.15);
             }
-            break; 
+            break;
+        }
+
+        if (!hit) {
+            vec3 bg = (mode == MODE_SOLID) ? editorBackground(rd) : skyColor(rd);
+            finalColor += throughput * bg;
+            break;
         }
 
         // Освещение
-        if (hit) {
-            vec3 p = ro + rd * (t - pixelRadius * t * 0.5);
-            vec3 n = getNormal(p, t);
-            vec3 albedo = vec3(0.8); float metallic = 0.0; float roughness = 0.5;
-            
-            if (objID >= 0.0) {
-                int id = int(objID);
-                albedo = scene.objects[id].color.rgb;
-                roughness = scene.objects[id].color.w;
-                metallic = scene.objects[id].params.w;
-                // Подсветка выделения
-                if (id == pc.selectedIndex) albedo = mix(albedo, vec3(1.0), 0.2);
-            }
-            
-            vec3 lightDir = normalize(vec3(0.5, 0.8, -0.5));
-            vec3 viewDir = -rd;
+        vec3 p = ro + rd * (t - pixelRadius * t * 0.5);
+        vec3 n = getNormal(p, t, m.bits);
+        vec3 albedo = vec3(0.8); float metallic = 0.0; float roughness = 0.5;
 
-            // SOLID MODE
-            if (effMode == 1) {
-                float NdotL = max(dot(n, lightDir), 0.0);
-                float shadow = 1.0;
-                if (NdotL > 0.0) shadow = calcHardShadow(p + n*0.05, lightDir, 10.0);
-                
-                vec3 ambient = albedo * 0.2;
-                vec3 diffuse = albedo * NdotL * shadow;
-                finalColor = ambient + diffuse;
-                break; 
-            }
+        if (objID >= 0.0) {
+            int id = int(objID);
+            albedo = scene.objects[id].color.rgb;
+            roughness = clamp(scene.objects[id].color.w, 0.04, 1.0);
+            metallic = scene.objects[id].bound.w;
+            // Подсветка выделения
+            if (scene.objects[id].extra.x > 0.5) albedo = mix(albedo, vec3(1.0), 0.2);
+        }
 
-            // PBR
-            vec3 directLight = calculatePBR(n, viewDir, lightDir, albedo, metallic, roughness);
-            float NdotL = dot(n, lightDir);
-            
-            if (NdotL > 0.0) {
-                float shadowSteps = (effMode == 3) ? 16.0 : 8.0;
-                float sh = calcSoftShadow(p + n*0.05, lightDir, 0.05, 10.0, shadowSteps); 
-                directLight *= sh;
-            } else directLight *= 0.0; 
-            
-            float ao = calcAO(p, n);
-            vec3 ambient = (0.03 * albedo) * ao;
-            finalColor += throughput * (directLight + ambient);
-            
-            if (effMode == 2) break; 
+        vec3 viewDir = -rd;
+        vec3 shadowOrigin = p + n * 0.05;
+        float sunNdotL = dot(n, sunDir);
 
-            // Отражения (только в режиме Rendered)
-            if (roughness > 0.6 || bounce >= maxBounces - 1) break;
-            
-            vec3 F0 = mix(vec3(0.04), albedo, metallic);
-            vec3 F = fresnelSchlick(max(dot(n, viewDir), 0.0), F0);
-            throughput *= F; 
-            
-            ro = p + n * 0.05; 
-            rd = reflect(rd, n);
-
-        } else {
-            // Skybox
-            vec3 skyCol = vec3(0.15, 0.15, 0.2);
-            skyCol = mix(skyCol, vec3(0.05, 0.05, 0.1), rd.y * 0.5 + 0.5);
-            if (bounce == 0 && ro.y > 0.0 && rd.y < 0.0) {
-                float tp = -ro.y / rd.y; vec3 pp = ro + rd * tp;
-                float g = step(0.98, fract(pp.x)) + step(0.98, fract(pp.z));
-                if (g > 0.5) skyCol = mix(skyCol, vec3(0.3), 0.5 * exp(-tp*0.02));
-            }
-            finalColor += throughput * skyCol;
+        // SOLID MODE
+        if (mode == MODE_SOLID) {
+            float shadow = 1.0;
+            if (sunNdotL > 0.0 && shadowMode > 0) shadow = calcShadow(shadowOrigin, sunDir, 10.0, false, 0.0);
+            vec3 ambient = albedo * (0.2 + 0.1 * n.y);
+            finalColor = ambient + albedo * max(sunNdotL, 0.0) * shadow;
             break;
         }
+
+        // PBR: солнце
+        vec3 direct = vec3(0.0);
+        if (sunNdotL > 0.0) {
+            float sh = 1.0;
+            if (shadowMode == 1) sh = calcShadow(shadowOrigin, sunDir, 10.0, false, 0.0);
+            else if (shadowMode == 2) sh = calcShadow(shadowOrigin, sunDir, 10.0, true, (mode == MODE_RENDERED) ? 16.0 : 8.0);
+            if (sh > 0.0) direct += calculatePBR(n, viewDir, sunDir, albedo, metallic, roughness) * sunRadiance * sh;
+        }
+
+        // PBR: точечные источники
+        bool lightShadows = (flags & FLAG_LIGHT_SHADOWS) != 0 && mode == MODE_RENDERED && shadowMode > 0 && bounce == 0;
+        for (int l = 0; l < u.counts.y; l++) {
+            vec3 toLight = u.lightPos[l].xyz - p;
+            float dist = length(toLight);
+            float range = u.lightPos[l].w;
+            if (dist >= range) continue;
+            vec3 L = toLight / dist;
+            if (dot(n, L) <= 0.0) continue;
+            float falloff = 1.0 - pow(dist / range, 4.0);
+            float atten = falloff * falloff / (dist * dist + 1.0);
+            float sh = 1.0;
+            if (lightShadows) sh = calcShadow(shadowOrigin, L, dist, shadowMode == 2, 16.0);
+            if (sh > 0.0) direct += calculatePBR(n, viewDir, L, albedo, metallic, roughness) * u.lightCol[l].rgb * atten * sh;
+        }
+
+        // Окружающий свет от неба (дешёвая замена GI)
+        float ao = ((flags & FLAG_AO) != 0) ? calcAO(p, n, m.bits) : 1.0;
+        vec3 hemi = mix(u.skyHorizon.rgb * 0.35, u.skyTop.rgb, n.y * 0.5 + 0.5);
+        vec3 F0 = mix(vec3(0.04), albedo, metallic);
+        vec3 F = fresnelSchlick(max(dot(n, viewDir), 0.0), F0);
+        vec3 ambient = albedo * (1.0 - metallic) * hemi * u.sunColor.w * ao;
+
+        bool reflectNext = (mode == MODE_RENDERED) && roughness <= 0.6 && bounce < maxBounces - 1;
+        if (!reflectNext) {
+            // Отражённый луч не трассируем — берём цвет неба в направлении отражения
+            ambient += F * skyColor(reflect(rd, n)) * (1.0 - roughness) * u.sunColor.w * ao;
+        }
+
+        finalColor += throughput * (direct + ambient);
+        if (!reflectNext) break;
+
+        throughput *= F;
+        ro = shadowOrigin;
+        rd = reflect(rd, n);
     }
-    
+
     // Tone Mapping
     finalColor = finalColor / (finalColor + vec3(1.0));
-    finalColor = pow(finalColor, vec3(1.0/2.2));
+    finalColor = pow(finalColor, vec3(1.0 / 2.2));
 
-    // --- ОТРИСОВКА ГИЗМО (Поверх всего / X-Ray) ---
-    if (pc.selectedIndex >= 0) {
-        vec3 center = pc.gizmoPos; // Берем центр, рассчитанный в main.cpp
-        vec3 gRo = pc.camToWorld[3].xyz;
-        vec3 gRd = mat3(pc.camToWorld) * normalize(vec3(uv, -pc.focalLength));
-        float centerDist = length(center - gRo);
-        
-        // Начинаем луч от 0.1, чтобы рисовать поверх геометрии сцены
-        float tG = 0.1; 
-        
-        // Увеличили количество шагов, чтобы линия не обрывалась
-        for(int i=0; i<80; i++) {
-            vec3 p = gRo + gRd * tG;
-            vec2 res = mapGizmo(p, gRo);
-            float lineD = 10000.0;
-
-            // Если тянем ось (1=X, 2=Y, 3=Z), рисуем направляющую линию
-            if (pc.mode == 0 && pc.draggingAxis >= 1 && pc.draggingAxis <= 3) {
-                 float scale = centerDist * 0.12;
-                 lineD = mapGuideLine(p, center, pc.draggingAxis, scale);
-            }
-            
-            // Попадание в Гизмо
-            if (res.x < 0.003 * tG) { 
-                vec3 axisCol = vec3(1.0);
-                if (res.y == 1.0) axisCol = vec3(0.9, 0.2, 0.2); // Red X
-                if (res.y == 2.0) axisCol = vec3(0.2, 0.9, 0.2); // Green Y
-                if (res.y == 3.0) axisCol = vec3(0.2, 0.2, 0.9); // Blue Z
-                if (res.y == 4.0) axisCol = vec3(1.0, 1.0, 1.0); // White Center
-                finalColor = axisCol; 
-                break;
-            }
-            // Попадание в направляющую линию
-            if (lineD < 0.003 * tG) {
-                vec3 lineCol = vec3(1.0);
-                if (pc.draggingAxis == 1) lineCol = vec3(0.9, 0.2, 0.2);
-                if (pc.draggingAxis == 2) lineCol = vec3(0.2, 0.9, 0.2);
-                if (pc.draggingAxis == 3) lineCol = vec3(0.2, 0.2, 0.9);
-                finalColor = lineCol; 
-                break;
-            }
-            
-            tG += max(min(abs(res.x), abs(lineD)), 0.01);
-            // Ограничиваем дальность, чтобы не считать вечно
-            if (tG > centerDist + 50.0) break;
-        }
+    if ((flags & FLAG_GRID) != 0) {
+        vec4 grid = gridOverlay(camRo, camRd, firstHitT, 1.0 / (resolution.y * focal));
+        finalColor = mix(finalColor, grid.rgb, grid.a);
     }
 
     imageStore(resultImage, texelCoord, vec4(finalColor, 1.0));
 
+    // Глубина для смешивания с полигональными мешами (та же проекция, что в mesh.vert)
     float depthOut = 1.0;
     if (firstHitT > 0.0) {
         float nearP = 0.1;
         float farP = 200.0;
-        depthOut = farP / (farP - nearP) + (farP * nearP) / (firstHitT * (nearP - farP));
+        float zView = firstHitT * -rdCam.z;
+        depthOut = clamp(farP / (farP - nearP) + (farP * nearP) / (zView * (nearP - farP)), 0.0, 1.0);
     }
     imageStore(sdfDepthImage, texelCoord, vec4(depthOut, 0.0, 0.0, 0.0));
 }

@@ -1,13 +1,22 @@
 #include "Input.h"
 #include "Common.h"
 #include "Scene.h"
+#include "Settings.h"
+#include "Game.h"
+#include "EditorUI.h"
 #include "MathUtils.h"
 #include "imgui.h"
 #include <algorithm>
 #include <cmath>
-#include <iostream>
+
+// Накопители перетаскивания гизмо: привязка работает по суммарному смещению
+static vec3 dragMoveAccum = {0, 0, 0};
+static vec3 dragMoveApplied = {0, 0, 0};
+static float dragAngleAccum = 0.0f;
+static float dragAngleApplied = 0.0f;
 
 CameraBasis getCameraBasis() {
+    if (isPlayMode()) return getPlayCameraBasis();
     cam.phi = std::clamp(cam.phi, 0.01f, 3.14159f - 0.01f);
     vec3 offset = { 
         cam.radius * std::sin(cam.phi) * std::sin(cam.theta), 
@@ -22,19 +31,29 @@ CameraBasis getCameraBasis() {
     return {pos, fwd, right, up};
 }
 
-bool projectWorldToScreen(vec3 worldPos, float width, float height, vec2& outScreen) {
+// Одно значение на рендер, выбор объектов и проекцию оверлеев
+float getCameraFocalLength() {
+    return 1.0f / std::tan(glm::radians(editorCfg.fovDeg) * 0.5f);
+}
+
+bool isInViewport(double x, double y) {
+    return x >= viewportRect.x && y >= viewportRect.y && x < viewportRect.x + viewportRect.z && y < viewportRect.y + viewportRect.w;
+}
+
+bool projectWorldToScreen(vec3 worldPos, vec2& outScreen) {
     CameraBasis b = getCameraBasis();
     vec3 rel = worldPos - b.pos;
     vec3 viewPos;
     viewPos.x = dot(rel, b.right);
     viewPos.y = dot(rel, b.up);
     viewPos.z = dot(rel, -b.fwd); 
-    if (viewPos.z >= 0.0f) return false; 
-    float f = 1.8f; 
+    if (viewPos.z >= -0.01f) return false; 
+    float f = getCameraFocalLength();
     float x = viewPos.x * f / -viewPos.z;
     float y = viewPos.y * f / -viewPos.z;
-    outScreen.x = (x * height + width) * 0.5f;
-    outScreen.y = (height - y * height) * 0.5f;
+    float width = viewportRect.z, height = viewportRect.w;
+    outScreen.x = viewportRect.x + (x * height + width) * 0.5f;
+    outScreen.y = viewportRect.y + (height - y * height) * 0.5f;
     return true;
 }
 
@@ -84,17 +103,19 @@ float getMouseDeltaOnAxis(vec3 axisWorldDir, float dx, float dy) {
     return (dx * axisScreenDir.x + (-dy) * axisScreenDir.y);
 }
 
-Ray getRayFromMouse(float mx, float my, float width, float height) {
+Ray getRayFromMouse(float mx, float my) {
     CameraBasis basis = getCameraBasis();
-    float ndcX = (2.0f * mx) / width - 1.0f;
-    float ndcY = 1.0f - (2.0f * my) / height; 
+    float width = std::max(viewportRect.z, 1.0f), height = std::max(viewportRect.w, 1.0f);
+    float ndcX = (2.0f * (mx - viewportRect.x)) / width - 1.0f;
+    float ndcY = 1.0f - (2.0f * (my - viewportRect.y)) / height; 
     float aspect = width / height;
-    vec3 viewDir = { ndcX * aspect, ndcY, -1.8f }; 
+    vec3 viewDir = { ndcX * aspect, ndcY, -getCameraFocalLength() }; 
     vec3 worldDir = basis.right * viewDir.x + basis.up * viewDir.y + (-basis.fwd) * viewDir.z;
     return { basis.pos, normalize(worldDir) };
 }
 
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
+    if (isPlayMode()) return;
     if (ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantCaptureMouse) {
         cam.leftMouse = false; cam.rightMouse = false; cam.middleMouse = false;
         isDraggingGizmo = false; isBoxSelecting = false;
@@ -116,8 +137,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
         
         if (action == GLFW_PRESS) {
             double x, y; glfwGetCursorPos(window, &x, &y);
-            int w, h; glfwGetFramebufferSize(window, &w, &h);
-            Ray ray = getRayFromMouse((float)x, (float)y, (float)w, (float)h);
+            Ray ray = getRayFromMouse((float)x, (float)y);
             
             currentGizmoAxis = AXIS_NONE;
             if (!selectedIndices.empty()) {
@@ -126,6 +146,8 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                 currentGizmoAxis = checkGizmoIntersection(ray, pivot, b.pos);
                 if (currentGizmoAxis != AXIS_NONE) { 
                     isDraggingGizmo = true; 
+                    dragMoveAccum = dragMoveApplied = vec3(0.0f);
+                    dragAngleAccum = dragAngleApplied = 0.0f;
                     saveUndo(); 
                     return; 
                 }
@@ -134,7 +156,6 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
         
         if (action == GLFW_RELEASE) {
             double x, y; glfwGetCursorPos(window, &x, &y);
-            int w, h; glfwGetFramebufferSize(window, &w, &h);
 
             if (isBoxSelecting) {
                 if (!(mods & GLFW_MOD_SHIFT)) selectedIndices.clear(); 
@@ -147,7 +168,8 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                     const auto& od = sceneGraph[i].gpuData;
                     vec3 p = {od.position.x, od.position.y, od.position.z};
                     vec2 screenPos;
-                    if (projectWorldToScreen(p, (float)w, (float)h, screenPos)) {
+                    if (!sceneGraph[i].worldActive) continue;
+                    if (projectWorldToScreen(p, screenPos)) {
                         if (screenPos.x >= minX && screenPos.x <= maxX && screenPos.y >= minY && screenPos.y <= maxY) {
                             if (std::find(selectedIndices.begin(), selectedIndices.end(), i) == selectedIndices.end()) {
                                 selectedIndices.push_back(i);
@@ -157,24 +179,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
                 }
             }
             else if (!isDraggingGizmo && !isMouseDragging) {
-                Ray ray = getRayFromMouse((float)x, (float)y, (float)w, (float)h);
-                float minD = 10000.0f;
-                int hitIndex = -1;
-                
-                for(int i=0; i<sceneGraph.size(); i++) {
-                    const auto& od = sceneGraph[i].gpuData;
-                    vec3 p = {od.position.x, od.position.y, od.position.z};
-                    vec3 rot = {od.rotationEuler.x, od.rotationEuler.y, od.rotationEuler.z};
-                    vec3 scl = {od.scale.x, od.scale.y, od.scale.z}; 
-                    float size = od.params.x;
-                    int type = (int)od.position.w;
-                    float d = -1.0f;
-                    
-                    if (type == 0) d = intersectEllipsoid(ray, p, rot, scl, size);
-                    else if (type == 1) d = intersectBoxOBB(ray, p, rot, scl, size);
-                    
-                    if (d > 0.0f && d < minD) { minD = d; hitIndex = i; }
-                }
+                int hitIndex = pickNode(getRayFromMouse((float)x, (float)y));
                 
                 if (!(mods & GLFW_MOD_SHIFT)) selectedIndices.clear();
 
@@ -198,6 +203,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 }
 
 void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
+    if (isPlayMode()) return;
     currentMouseX = xpos; currentMouseY = ypos;
     if (ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantCaptureMouse) {
         if (!cam.leftMouse && !cam.rightMouse && !cam.middleMouse) return;
@@ -239,19 +245,20 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
                 float d = getMouseDeltaOnAxis(axis, dx, dy);
                 moveDeltaWorld = axis * d * speed;
             }
+
+            // Привязка к шагу сетки (Ctrl временно инвертирует настройку)
+            bool ctrl = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS;
+            if (editorCfg.snap != ctrl) {
+                dragMoveAccum += moveDeltaWorld;
+                vec3 snapped = glm::round(dragMoveAccum / editorCfg.snapStep) * editorCfg.snapStep;
+                moveDeltaWorld = snapped - dragMoveApplied;
+                dragMoveApplied = snapped;
+            }
             
             for(int idx : selectedIndices) {
                 if(idx < sceneGraph.size()) {
-                    bool parentIsSelected = false;
-                    int p = sceneGraph[idx].parent;
-                    while (p != -1) {
-                        if (std::find(selectedIndices.begin(), selectedIndices.end(), p) != selectedIndices.end()) {
-                            parentIsSelected = true;
-                            break;
-                        }
-                        p = sceneGraph[p].parent;
-                    }
-                    if (parentIsSelected) continue;
+                    // Дети выделенного родителя двигаются вместе с ним
+                    if (isAncestorSelected(idx)) continue;
 
                     vec3 localDelta = moveDeltaWorld;
                     
@@ -294,18 +301,19 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
             if (length(tangent) < 0.1f) tangent = b.right;
             float delta = getMouseDeltaOnAxis(tangent, dx, dy) * 0.02f;
 
+            bool ctrl = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS;
+            if (editorCfg.snap != ctrl) {
+                float step = glm::radians(editorCfg.snapAngleDeg);
+                dragAngleAccum += delta;
+                float snapped = std::round(dragAngleAccum / step) * step;
+                delta = snapped - dragAngleApplied;
+                dragAngleApplied = snapped;
+            }
+
             for(int idx : selectedIndices) {
                 if(idx < sceneGraph.size()) {
-                    // Пропускаем детей, если родитель выделен (вращение наследуется)
-                    bool parentIsSelected = false;
-                    int p = sceneGraph[idx].parent;
-                    while (p != -1) {
-                         if (std::find(selectedIndices.begin(), selectedIndices.end(), p) != selectedIndices.end()) {
-                             parentIsSelected = true; break;
-                         }
-                         p = sceneGraph[p].parent;
-                    }
-                    if (parentIsSelected) continue;
+                    // Дети выделенного родителя двигаются вместе с ним
+                    if (isAncestorSelected(idx)) continue;
 
                     if (currentGizmoAxis == AXIS_X) sceneGraph[idx].localRotation.x += delta;
                     if (currentGizmoAxis == AXIS_Y) sceneGraph[idx].localRotation.y += delta;
@@ -329,16 +337,8 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
 
             for(int idx : selectedIndices) {
                 if(idx < sceneGraph.size()) {
-                    // Пропускаем детей
-                    bool parentIsSelected = false;
-                    int p = sceneGraph[idx].parent;
-                    while (p != -1) {
-                         if (std::find(selectedIndices.begin(), selectedIndices.end(), p) != selectedIndices.end()) {
-                             parentIsSelected = true; break;
-                         }
-                         p = sceneGraph[p].parent;
-                    }
-                    if (parentIsSelected) continue;
+                    // Дети выделенного родителя двигаются вместе с ним
+                    if (isAncestorSelected(idx)) continue;
 
                     if (currentGizmoAxis == AXIS_CENTER) {
                         float s = 1.0f + deltaS;
@@ -361,64 +361,82 @@ void cursor_pos_callback(GLFWwindow* window, double xpos, double ypos) {
 }
 
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
+    if (isPlayMode()) return;
     if (ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantCaptureMouse) return;
     if (yoffset > 0) cam.radius *= 0.9f; else cam.radius *= 1.1f;
     if (cam.radius < 0.1f) cam.radius = 0.1f;
 }
 
 void processInput(GLFWwindow* window, float deltaTime) {
-    if (ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantCaptureKeyboard) return;
-    if (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS) currentMode = MODE_MOVE;
-    if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS) currentMode = MODE_ROTATE;
-    if (glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS) currentMode = MODE_SCALE;
-    
-    if (glfwGetKey(window, GLFW_KEY_KP_DECIMAL) == GLFW_PRESS && !selectedIndices.empty()) cam.target = getSelectionCenter();
-    bool isCtrl = (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS);
-    
-    static float undoTimer = 0.0f;
-    if (glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS && isCtrl) {
-        if (undoTimer <= 0.0f) { performUndo(); undoTimer = 0.15f; } else undoTimer -= deltaTime;
-    } else undoTimer = 0.0f;
+    ImGuiIO& io = ImGui::GetIO();
+    auto pressed = [](ImGuiKey key) { return ImGui::IsKeyPressed(key, false); };
 
-    static float delTimer = 0.0f;
-    if (glfwGetKey(window, GLFW_KEY_DELETE) == GLFW_PRESS) {
-        if (delTimer <= 0.0f) { deleteSelectedObject(); delTimer = 0.2f; } else delTimer -= deltaTime;
-    } else delTimer = 0.0f;
-    
-    static float copyTimer = 0.0f;
-    if (glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS && isCtrl) {
-        if (copyTimer <= 0.0f && !selectedIndices.empty()) {
+    if (pressed(ImGuiKey_F5)) { if (isPlayMode()) stopPlay(window); else startPlay(window); return; }
+    if (isPlayMode()) {
+        if (pressed(ImGuiKey_Escape)) stopPlay(window);
+        return;
+    }
+    if (io.WantCaptureKeyboard || io.WantTextInput) return;
+
+    bool ctrl = io.KeyCtrl, shift = io.KeyShift, alt = io.KeyAlt;
+
+    if (ctrl) {
+        if (pressed(ImGuiKey_Z)) { if (shift) performRedo(); else performUndo(); }
+        if (pressed(ImGuiKey_Y)) performRedo();
+        if (pressed(ImGuiKey_S)) { if (shift) actionSaveSceneAs(window); else actionSaveScene(window); }
+        if (pressed(ImGuiKey_O)) actionOpenScene(window);
+        if (pressed(ImGuiKey_N)) resetScene();
+        if (pressed(ImGuiKey_A)) actionSelectAll();
+        if (pressed(ImGuiKey_C) && !selectedIndices.empty()) {
             clipboardNodes.clear();
-            for (int idx : selectedIndices) if (idx < sceneGraph.size()) clipboardNodes.push_back(sceneGraph[idx]);
-            showToast("Copied"); copyTimer = 0.3f; 
-        } else copyTimer -= deltaTime;
-    } else copyTimer = 0.0f;
-    
-    static float pasteTimer = 0.0f;
-    if (glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS && isCtrl) {
-        if (pasteTimer <= 0.0f && !clipboardNodes.empty()) {
+            for (int idx : selectedIndices) if (idx < (int)sceneGraph.size()) clipboardNodes.push_back(sceneGraph[idx]);
+            showToast("Copied");
+        }
+        if (pressed(ImGuiKey_V) && !clipboardNodes.empty()) {
             saveUndo(); selectedIndices.clear();
             for (const auto& node : clipboardNodes) {
                 if (sceneGraph.size() >= MAX_OBJECTS) break;
                 SceneNode newNode = node; newNode.name += "_Paste"; newNode.localPosition.x += 1.0f; newNode.parent = -1; newNode.children.clear();
                 sceneGraph.push_back(newNode); selectedIndices.push_back((int)sceneGraph.size() - 1);
             }
-            showToast("Pasted"); pasteTimer = 0.2f;
-        } else pasteTimer -= deltaTime;
-    } else pasteTimer = 0.0f;
-    
-    static float dupTimer = 0.0f;
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS && glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS) {
-        if (dupTimer <= 0.0f && !selectedIndices.empty()) { duplicateSelectedObject(); dupTimer = 0.25f; } else dupTimer -= deltaTime;
-    } else dupTimer = 0.0f;
+            showToast("Pasted");
+        }
+        return;   // Ctrl-комбинации не должны двигать камеру
+    }
+
+    if (alt) {
+        if (pressed(ImGuiKey_D)) duplicateSelectedObject();
+        if (pressed(ImGuiKey_A)) selectedIndices.clear();
+        return;
+    }
+
+    if (pressed(ImGuiKey_1)) currentMode = MODE_MOVE;
+    if (pressed(ImGuiKey_2)) currentMode = MODE_ROTATE;
+    if (pressed(ImGuiKey_3)) currentMode = MODE_SCALE;
+    if (pressed(ImGuiKey_F1)) currentShadingMode = SHADING_WIRE;
+    if (pressed(ImGuiKey_F2)) currentShadingMode = SHADING_SOLID;
+    if (pressed(ImGuiKey_F3)) currentShadingMode = SHADING_MATERIAL;
+    if (pressed(ImGuiKey_F4)) currentShadingMode = SHADING_RENDERED;
+    if (pressed(ImGuiKey_T)) showToolbar = !showToolbar;
+    if (pressed(ImGuiKey_N)) showSidebar = !showSidebar;
+    if (pressed(ImGuiKey_G)) editorCfg.showGrid = !editorCfg.showGrid;
+    if (pressed(ImGuiKey_Escape)) selectedIndices.clear();
+    if (pressed(ImGuiKey_Delete) || pressed(ImGuiKey_X)) deleteSelectedObject();
+    if ((pressed(ImGuiKey_KeypadDecimal) || pressed(ImGuiKey_F)) && !selectedIndices.empty()) cam.target = getSelectionCenter();
+    if (pressed(ImGuiKey_H) && !selectedIndices.empty()) {
+        saveUndo();
+        for (int idx : selectedIndices) if (idx < (int)sceneGraph.size()) sceneGraph[idx].active = !sceneGraph[idx].active;
+    }
 
     float speed = 5.0f * deltaTime;
-    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) speed *= 3.0f;
+    if (shift) speed *= 3.0f;
     CameraBasis b = getCameraBasis();
     vec3 forward = normalize(vec3{b.fwd.x, 0.0f, b.fwd.z});
     vec3 right   = normalize(vec3{b.right.x, 0.0f, b.right.z});
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) cam.target += forward * speed;
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) cam.target -= forward * speed;
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) cam.target -= right * speed;
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) cam.target += right * speed;
+    if (ImGui::IsKeyDown(ImGuiKey_W)) cam.target += forward * speed;
+    if (ImGui::IsKeyDown(ImGuiKey_S)) cam.target -= forward * speed;
+    if (ImGui::IsKeyDown(ImGuiKey_A)) cam.target -= right * speed;
+    if (ImGui::IsKeyDown(ImGuiKey_D)) cam.target += right * speed;
+    if (ImGui::IsKeyDown(ImGuiKey_E)) cam.target.y += speed;
+    if (ImGui::IsKeyDown(ImGuiKey_Q)) cam.target.y -= speed;
 }

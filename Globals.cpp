@@ -6,12 +6,14 @@ bool showSettingsWindow = false;
 int selectedSettingsTab = 0;
 bool showToolbar = true;
 bool showSidebar = true;
-bool showToolSettings = true;
+bool showAssetBrowser = true;
 int currentShadingMode = 1;
 std::string defaultExportPath = "";
 
 std::vector<SceneNode> sceneGraph;
-std::vector<ObjectData> gpuObjectCache;
+std::vector<GpuObject> gpuObjectCache;
+std::vector<GpuLight> gpuLightCache;
+WorldSettings world;
 std::vector<int> selectedIndices;
 std::vector<SceneNode> clipboardNodes;
 std::vector<MeshData> meshCache;
@@ -22,7 +24,7 @@ NosHeader lastLoadedHeader = {};
 GameEditorMode currentEditorMode = EDITOR_OBJECT;
 EditorMode currentMode = MODE_MOVE;
 GizmoAxis currentGizmoAxis = AXIS_NONE;
-vec4 currentUiBounds = {0,0,0,0};
+vec4 viewportRect = {0, 0, (float)INITIAL_WIDTH, (float)INITIAL_HEIGHT};
 CameraState cam;
 
 bool triggerSceneContextMenu = false;
@@ -34,7 +36,7 @@ double currentMouseX = 0.0;
 double currentMouseY = 0.0;
 bool isDraggingGizmo = false;
 bool showGizmos = true;
-bool showChangelog = true;
+bool showChangelog = false;
 
 void* g_AppLogoID = nullptr;
 

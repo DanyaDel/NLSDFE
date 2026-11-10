@@ -73,7 +73,7 @@ set(IMGUI_SOURCES
     ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
 )
 
-add_executable(SDF_Engine main.cpp Renderer.cpp EditorUI.cpp EngineBridge.cpp Scene.cpp Input.cpp Globals.cpp FileDialogs.cpp ${IMGUI_SOURCES})
+add_executable(SDF_Engine main.cpp Renderer.cpp EditorUI.cpp EngineBridge.cpp Scene.cpp Input.cpp Globals.cpp FileDialogs.cpp Settings.cpp Game.cpp ${IMGUI_SOURCES})
 
 # Инклюды для ImGui
 target_include_directories(SDF_Engine PRIVATE ${IMGUI_DIR} ${IMGUI_DIR}/backends)
@@ -87,27 +87,38 @@ endif()
 # VMA include path (FetchContent target might not expose it directly depending on version)
 target_include_directories(SDF_Engine PRIVATE ${vma_SOURCE_DIR}/include)
 
+# Шейдеры: каждый .spv пересобирается только при изменении своего исходника
+# и сразу кладётся рядом с исполняемым файлом (движок ищет их там)
 find_program(GLSLC_EXECUTABLE glslc HINTS $ENV{VULKAN_SDK}/Bin)
 if(GLSLC_EXECUTABLE)
-    add_custom_command(
-        TARGET SDF_Engine PRE_BUILD
-        COMMAND ${GLSLC_EXECUTABLE} ${CMAKE_SOURCE_DIR}/shaders/shader.comp -o ${CMAKE_BINARY_DIR}/shader.spv
-        COMMAND ${GLSLC_EXECUTABLE} ${CMAKE_SOURCE_DIR}/shaders/depth_prime.vert -o ${CMAKE_BINARY_DIR}/depth_prime_vert.spv
-        COMMAND ${GLSLC_EXECUTABLE} ${CMAKE_SOURCE_DIR}/shaders/depth_prime.frag -o ${CMAKE_BINARY_DIR}/depth_prime_frag.spv
-        COMMAND ${GLSLC_EXECUTABLE} ${CMAKE_SOURCE_DIR}/shaders/mesh.vert -o ${CMAKE_BINARY_DIR}/mesh_vert.spv
-        COMMAND ${GLSLC_EXECUTABLE} ${CMAKE_SOURCE_DIR}/shaders/mesh.frag -o ${CMAKE_BINARY_DIR}/mesh_frag.spv
+    set(SHADER_PAIRS
+        "shader.comp|shader.spv"
+        "composite.vert|composite_vert.spv"
+        "composite.frag|composite_frag.spv"
+        "mesh.vert|mesh_vert.spv"
+        "mesh.frag|mesh_frag.spv"
     )
+    set(SHADER_OUTPUTS "")
+    foreach(PAIR ${SHADER_PAIRS})
+        string(REPLACE "|" ";" PAIR_LIST ${PAIR})
+        list(GET PAIR_LIST 0 SHADER_SRC)
+        list(GET PAIR_LIST 1 SHADER_SPV)
+        set(SHADER_OUT ${CMAKE_BINARY_DIR}/${SHADER_SPV})
+        add_custom_command(
+            OUTPUT ${SHADER_OUT}
+            COMMAND ${GLSLC_EXECUTABLE} -O ${CMAKE_SOURCE_DIR}/shaders/${SHADER_SRC} -o ${SHADER_OUT}
+            DEPENDS ${CMAKE_SOURCE_DIR}/shaders/${SHADER_SRC}
+            COMMENT "Compiling shader ${SHADER_SRC}"
+        )
+        list(APPEND SHADER_OUTPUTS ${SHADER_OUT})
+    endforeach()
+    add_custom_target(Shaders ALL DEPENDS ${SHADER_OUTPUTS})
+    add_dependencies(SDF_Engine Shaders)
     add_custom_command(
         TARGET SDF_Engine POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${CMAKE_BINARY_DIR}/shader.spv
-            ${CMAKE_BINARY_DIR}/depth_prime_vert.spv
-            ${CMAKE_BINARY_DIR}/depth_prime_frag.spv
-            ${CMAKE_BINARY_DIR}/mesh_vert.spv
-            ${CMAKE_BINARY_DIR}/mesh_frag.spv
-            $<TARGET_FILE_DIR:SDF_Engine>
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${SHADER_OUTPUTS} $<TARGET_FILE_DIR:SDF_Engine>
         COMMENT "Copying shaders to executable directory..."
     )
 else()
-    message(WARNING "glslc not found! Compile shader manually.")
+    message(WARNING "glslc not found! Compile shaders manually (see README).")
 endif()
