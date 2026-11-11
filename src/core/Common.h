@@ -19,7 +19,7 @@ const int INITIAL_WIDTH = 1280;
 const int INITIAL_HEIGHT = 720;
 const std::string SHADER_SOURCE = "shaders/shader.comp";
 const std::string SHADER_BINARY = "shader.spv";
-const std::string ENGINE_VERSION = "v1.4.0";
+const std::string ENGINE_VERSION = "v1.5.0";
 const int MAX_OBJECTS = 128;   // Лимит узлов сцены (и ширина битовой маски отсечения в шейдере)
 const int MAX_LIGHTS = 8;      // Точечные источники света
 

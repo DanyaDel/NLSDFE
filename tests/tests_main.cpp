@@ -10,6 +10,7 @@ void runConvertTests();
 void runPhysicsTests();
 void runScriptTests();
 void runVisualTests();
+void runBlenderTests();
 
 int main() {
     runSceneTests();
@@ -18,6 +19,7 @@ int main() {
     runPhysicsTests();
     runScriptTests();
     runVisualTests();
+    runBlenderTests();
     std::printf("\n%d checks, %d failed\n", g_testsRun, g_testsFailed);
     return g_testsFailed == 0 ? 0 : 1;
 }

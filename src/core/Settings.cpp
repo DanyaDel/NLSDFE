@@ -72,6 +72,7 @@ bool loadSettings(const std::string& path) {
             else if (k == "fovDeg") editorCfg.fovDeg = std::stof(v);
             else if (k == "showStats") editorCfg.showStats = std::stoi(v) != 0;
             else if (k == "projectDir") editorCfg.projectDir = v;
+            else if (k == "blenderPath") editorCfg.blenderPath = v;
             else if (k == "lastVersion") editorCfg.lastVersion = v;
         } catch (...) {}
     }
@@ -114,5 +115,6 @@ void saveSettings(const std::string& path) {
     f << "fovDeg=" << editorCfg.fovDeg << "\n";
     f << "showStats=" << editorCfg.showStats << "\n";
     f << "projectDir=" << editorCfg.projectDir << "\n";
+    f << "blenderPath=" << editorCfg.blenderPath << "\n";
     f << "lastVersion=" << editorCfg.lastVersion << "\n";
 }

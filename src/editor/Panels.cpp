@@ -6,6 +6,7 @@
 #include "Renderer.h"
 #include "Project.h"
 #include "Conversion.h"
+#include "BlenderLink.h"
 #include "ScriptSystem.h"
 #include "EngineBridge.h"
 #include "FileDialogs.h"
@@ -734,6 +735,7 @@ void drawEditingLayout(GLFWwindow* window, const WorkArea& area, bool gameplay) 
         if (ImGui::MenuItem("Delete")) { deleteSelectedObject(); }
         if (ImGui::MenuItem("Convert to Mesh...", nullptr, false, canConvert(CONVERT_TO_MESH))) requestConversion(CONVERT_TO_MESH);
         if (ImGui::MenuItem("Convert to SDF Volume...", nullptr, false, canConvert(CONVERT_TO_VOLUME))) requestConversion(CONVERT_TO_VOLUME);
+        if (ImGui::MenuItem("Edit in Blender", nullptr, false, canEditInBlender())) editInBlender();
         if (ImGui::BeginMenu("Add")) { addMenuItems(window); ImGui::EndMenu(); }
         ImGui::EndPopup();
     }

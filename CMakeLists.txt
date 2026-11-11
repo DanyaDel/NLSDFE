@@ -124,7 +124,7 @@ target_include_directories(nls_core PUBLIC src/core ${vma_SOURCE_DIR}/include $<
 target_link_libraries(nls_core PUBLIC glm::glm spdlog::spdlog ${NLS_VULKAN_HEADERS})
 
 # scene: граф сцены, SDF на CPU, файлы .nos, камера
-add_library(nls_scene STATIC src/scene/Scene.cpp src/scene/Globals.cpp src/scene/Camera.cpp src/scene/UvTools.cpp src/scene/MeshConvert.cpp)
+add_library(nls_scene STATIC src/scene/Scene.cpp src/scene/Globals.cpp src/scene/Camera.cpp src/scene/UvTools.cpp src/scene/MeshConvert.cpp src/scene/Json.cpp src/scene/BlenderExchange.cpp)
 target_include_directories(nls_scene PUBLIC src/scene)
 target_link_libraries(nls_scene PUBLIC nls_core)
 
@@ -172,6 +172,7 @@ add_executable(SDF_Engine
     src/editor/Demo.cpp
     src/editor/ExportWindow.cpp
     src/editor/Conversion.cpp
+    src/editor/BlenderLink.cpp
     src/editor/workspaces/ModelWorkspace.cpp
     src/editor/workspaces/SceneWorkspace.cpp
     src/editor/workspaces/UvWorkspace.cpp
@@ -184,12 +185,17 @@ add_executable(SDF_Engine
 target_include_directories(SDF_Engine PRIVATE src/editor src/editor/workspaces)
 target_link_libraries(SDF_Engine PRIVATE nls_runtime imnodes)
 
+# Аддон для Object > Edit in Blender лежит рядом с редактором
+add_custom_command(TARGET SDF_Engine POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/tools/blender/nlsdfe_link.py $<TARGET_FILE_DIR:SDF_Engine>/nlsdfe_link.py
+    COMMENT "Copying the Blender add-on...")
+
 # Плеер: движок без редактора
 add_executable(NLSDFE_Player src/app/player_main.cpp)
 target_link_libraries(NLSDFE_Player PRIVATE nls_runtime)
 
 # Тесты без окна и GPU
-add_executable(nls_tests tests/tests_main.cpp tests/test_scene.cpp tests/test_physics.cpp tests/test_script.cpp tests/test_convert.cpp tests/test_visual.cpp)
+add_executable(nls_tests tests/tests_main.cpp tests/test_scene.cpp tests/test_physics.cpp tests/test_script.cpp tests/test_convert.cpp tests/test_visual.cpp tests/test_blender.cpp)
 target_link_libraries(nls_tests PRIVATE nls_scene nls_physics nls_script)
 enable_testing()
 add_test(NAME nls_tests COMMAND nls_tests)

@@ -3,6 +3,7 @@
 #include "Project.h"
 #include "Demo.h"
 #include "Conversion.h"
+#include "BlenderLink.h"
 #include "Common.h"
 #include "Scene.h"
 #include "Settings.h"
@@ -30,6 +31,13 @@ struct ChangelogEntry {
 };
 
 const std::vector<ChangelogEntry> appChangelog = {
+    ChangelogEntry("v1.5.0 - Conversion, Blender, Visual Scripts", "11.11.2026", {
+        "Object > Convert to Mesh: SDF models become polygon meshes with colours and UVs",
+        "Object > Convert to SDF Volume: meshes become voxel SDF shapes with CSG and physics",
+        "Object > Edit in Blender: live link, Ctrl+S in Blender sends changes back",
+        "Visual scripting: node graphs compiled to NLS, every engine function as a node",
+        "Fixed: the UI did not react to the mouse"
+    }),
     ChangelogEntry("v1.4.0 - Game Engine", "11.11.2026", {
         "Engine split into modules; separate player executable for exported games",
         "Editor modes: Model, Scene, UV and Script editors; import and export in the File menu",
@@ -198,6 +206,9 @@ static void renderSettingsWindow() {
                 changed |= ImGui::DragFloat("Rotation snap", &editorCfg.snapAngleDeg, 1.0f, 1.0f, 90.0f, "%.0f deg");
                 changed |= ImGui::SliderFloat("Camera FOV", &editorCfg.fovDeg, 20.0f, 110.0f, "%.0f deg");
                 changed |= ImGui::Checkbox("Show stats overlay", &editorCfg.showStats);
+                char blenderBuf[512];
+                strncpy(blenderBuf, editorCfg.blenderPath.c_str(), sizeof(blenderBuf)); blenderBuf[sizeof(blenderBuf) - 1] = 0;
+                if (ImGui::InputText("Blender executable", blenderBuf, sizeof(blenderBuf))) { editorCfg.blenderPath = blenderBuf; changed = true; }
                 ImGui::Separator();
                 ImGui::TextDisabled("Project folder");
                 ImGui::TextWrapped("%s", project.root.c_str());
@@ -434,6 +445,8 @@ static float drawHeaderBar(GLFWwindow* window, float y, bool editing) {
                 if (ImGui::MenuItem("Duplicate", "Alt+D")) duplicateSelectedObject();
                 if (ImGui::MenuItem("Delete", "X")) deleteSelectedObject();
                 ImGui::Separator();
+                if (ImGui::MenuItem("Edit in Blender", nullptr, false, canEditInBlender())) editInBlender();
+                ImGui::Separator();
                 if (ImGui::MenuItem("Convert to Mesh...", nullptr, false, canConvert(CONVERT_TO_MESH))) requestConversion(CONVERT_TO_MESH);
                 if (ImGui::MenuItem("Convert to SDF Volume...", nullptr, false, canConvert(CONVERT_TO_VOLUME))) requestConversion(CONVERT_TO_VOLUME);
                 ImGui::Separator();
@@ -455,6 +468,15 @@ static float drawHeaderBar(GLFWwindow* window, float y, bool editing) {
             if (toggle("Snap", editorCfg.snap, "Snap to grid while dragging (Ctrl inverts)")) { editorCfg.snap = !editorCfg.snap; saveSettings(settingsPath()); }
             ImGui::SetNextItemWidth(70.0f);
             if (ImGui::DragFloat("##snapstep", &editorCfg.snapStep, 0.05f, 0.05f, 10.0f, "%.2f m") && !ImGui::IsItemActive()) saveSettings(settingsPath());
+
+            if (currentWorkspace == WS_MODEL) {
+                ImGui::TextDisabled("|");
+                bool can = canEditInBlender();
+                if (!can) ImGui::BeginDisabled();
+                if (ImGui::Button("Edit in Blender")) editInBlender();
+                if (!can) ImGui::EndDisabled();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Open this model in Blender; saving there (Ctrl+S) sends it back");
+            }
 
             // Справа: запуск и режим затенения
             const float buttonWidth = 25.0f;
@@ -511,6 +533,7 @@ void renderUI(GLFWwindow* window) {
 
     drawExportWindow(window);
     drawConversionPopup();
+    pollBlender();
     renderSettingsWindow();
     renderChangelogWindow();
     renderAboutWindow();

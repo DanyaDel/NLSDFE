@@ -36,6 +36,7 @@
 #include "Project.h"
 #include "Demo.h"
 #include "Conversion.h"
+#include "BlenderLink.h"
 #include "Panels.h"
 #include "ScriptSystem.h"
 #include "imgui.h"
@@ -52,6 +53,7 @@ struct LaunchOptions {
     int select = -1;           // --select N: выделить узел (дымовой тест инспектора)
     std::string openScript;    // --open-script: открыть скрипт проекта в Script Editor
     std::string convert;       // --convert mesh|volume: конвертировать выделенное при старте
+    bool blenderRoundTrip = false;   // --blender-roundtrip: выделенное через фоновый Blender и обратно
     int convertResolution = 64;
     int workspace = -1;        // --workspace 0..4: стартовая вкладка
     float hold = 0.0f;         // --hold N: поработать N секунд и выйти (дымовой тест интерфейса)
@@ -111,6 +113,12 @@ public:
             updateSceneCaches();
             bool ok = runConversion(options.convert == "mesh" ? CONVERT_TO_MESH : CONVERT_TO_VOLUME, options.convertResolution, false);
             spdlog::info("Conversion to {}: {} ({} objects in scene)", options.convert, ok ? "ok" : "failed", sceneGraph.size());
+            if (!ok) exportFailed = true;
+        }
+
+        if (options.blenderRoundTrip) {
+            bool ok = editInBlender(true);
+            spdlog::info("Blender round trip: {} ({} sessions)", ok ? "sent" : "failed", blenderSessionCount());
             if (!ok) exportFailed = true;
         }
 
@@ -367,6 +375,7 @@ static void printUsage() {
         "  --workspace <0..3>     start in the Model, Scene, UV or Script editor\n"
         "  --hold <seconds>       run for a while and exit (UI smoke test)\n"
         "  --open-script <scripts/x.nls|.nlsg>  open a script in the Script Editor\n"
+        "  --select <n> --blender-roundtrip    send node n through a background Blender and back\n"
         "  --select <n> --convert mesh|volume [--convert-resolution r]\n"
         "                         convert node n at startup (test hook)\n"
         "  --bench <frames>       measure average frame time and exit\n"
@@ -391,6 +400,7 @@ int main(int argc, char** argv) {
             else if (a == "--workspace") opts.workspace = std::stoi(next());
             else if (a == "--select") opts.select = std::stoi(next());
             else if (a == "--open-script") opts.openScript = next();
+            else if (a == "--blender-roundtrip") opts.blenderRoundTrip = true;
             else if (a == "--convert") { opts.convert = next(); if (opts.convert != "mesh" && opts.convert != "volume") throw std::runtime_error("--convert takes mesh or volume"); }
             else if (a == "--convert-resolution") opts.convertResolution = std::stoi(next());
             else if (a == "--hold") opts.hold = std::stof(next());

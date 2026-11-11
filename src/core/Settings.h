@@ -30,7 +30,8 @@ struct EditorSettings {
     float snapAngleDeg = 15.0f;
     float fovDeg = 45.0f;
     bool showStats = true;
-    std::string projectDir = "project";   // Папка проекта: assets/, scenes/, scripts/
+    std::string projectDir = "project";
+    std::string blenderPath = "blender";   // Для Object > Edit in Blender   // Папка проекта: assets/, scenes/, scripts/
     std::string lastVersion;          // Для показа changelog один раз на версию
 };
 
