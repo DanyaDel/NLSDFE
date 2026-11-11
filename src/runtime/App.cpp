@@ -2,6 +2,7 @@
 #include "Scene.h"
 #include "Settings.h"
 #include "Audio.h"
+#include "backends/imgui_impl_glfw.h"
 #include <fstream>
 #include <stdexcept>
 #include <algorithm>
@@ -37,8 +38,15 @@ void App::initApp(const char* title, bool fixedSize) {
     if (!window) throw std::runtime_error("Failed to create window");
     glfwSetWindowUserPointer(window, this);
     glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+    installInputCallbacks();
 
     renderer.init(window);
+
+    // Мышь должна сначала попадать в ImGui. Если кто-то переставил обработчики после
+    // инициализации, интерфейс не нажимается — лучше узнать об этом сразу.
+    GLFWmousebuttonfun current = glfwSetMouseButtonCallback(window, nullptr);
+    glfwSetMouseButtonCallback(window, current);
+    if (current != ImGui_ImplGlfw_MouseButtonCallback) spdlog::error("Input: ImGui mouse callback was replaced, the UI will not receive clicks");
     renderer.setupInternalLogo(window);
     g_meshLoader = [this](const std::string& path) { return getOrLoadMesh(path); };
 }

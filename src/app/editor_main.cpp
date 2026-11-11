@@ -79,9 +79,6 @@ public:
 
         resetScene();
         initApp("Next Level Signed Distance Field Engine", automated);
-        glfwSetCursorPosCallback(window, cursor_pos_callback);
-        glfwSetMouseButtonCallback(window, mouse_button_callback);
-        glfwSetScrollCallback(window, scroll_callback);
 
         if (firstRun && options.preset < 0) {
             applyFirstRunPreset();
@@ -244,6 +241,12 @@ public:
 
 private:
     LaunchOptions options;
+
+    void installInputCallbacks() override {
+        glfwSetCursorPosCallback(window, cursor_pos_callback);
+        glfwSetMouseButtonCallback(window, mouse_button_callback);
+        glfwSetScrollCallback(window, scroll_callback);
+    }
 
     // Сетка из чередующихся примитивов — нагрузка для --bench
     void addBenchmarkObjects(int count) {
