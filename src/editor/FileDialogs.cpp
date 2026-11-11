@@ -47,6 +47,7 @@ namespace {
             if (!*filter) break;
             std::string pattern = filter; filter += pattern.size() + 1;
             if (pattern == "*.*") pattern = "*";
+            for (char& c : pattern) if (c == ';') c = ' ';   // В Win32 маски разделяет ';', в zenity — пробел
             out.push_back({desc, pattern});
         }
         return out;

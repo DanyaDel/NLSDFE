@@ -30,7 +30,7 @@ struct EditorSettings {
     float snapAngleDeg = 15.0f;
     float fovDeg = 45.0f;
     bool showStats = true;
-    std::string assetDir = "assets";
+    std::string projectDir = "project";   // Папка проекта: assets/, scenes/, scripts/
     std::string lastVersion;          // Для показа changelog один раз на версию
 };
 

@@ -101,6 +101,20 @@ void runPhysicsTests() {
     CHECK_NEAR(sceneGraph[upper].localPosition.y, floorTop + 1.5, 0.05);
     CHECK_NEAR(sceneGraph[upper].localPosition.x, 0.0, 0.05);
 
+    TEST_SECTION("physics: tower of four equal boxes stands");
+    emptyWorld();
+    {
+        int crates[4];
+        for (int i = 0; i < 4; i++) crates[i] = addBody(SDF_BOX, {0, floorTop + 0.4f + i * 0.82f, 0}, vec3(0.4f));
+        simulate(8.0f);
+        for (int i = 0; i < 4; i++) {
+            CHECK_NEAR(sceneGraph[crates[i]].localPosition.y, floorTop + 0.4 + i * 0.8, 0.06);
+            CHECK_NEAR(sceneGraph[crates[i]].localPosition.x, 0.0, 0.08);
+            CHECK_NEAR(sceneGraph[crates[i]].localPosition.z, 0.0, 0.08);
+        }
+        CHECK(sceneGraph[crates[3]].body.sleeping);
+    }
+
     TEST_SECTION("physics: momentum transfer between equal balls");
     emptyWorld();
     int a = addBody(SDF_SPHERE, {-2, 0, 0}, vec3(0.5f), 1.0f);

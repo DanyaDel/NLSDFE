@@ -236,7 +236,6 @@ struct CameraState {
 };
 
 // --- Enums ---
-enum GameEditorMode { EDITOR_OBJECT, EDITOR_MAP, EDITOR_GAME_BUILD };
 enum EditorMode { MODE_MOVE, MODE_ROTATE, MODE_SCALE };
 enum GizmoAxis { AXIS_NONE, AXIS_X, AXIS_Y, AXIS_Z, AXIS_CENTER };
 enum ShadingMode { SHADING_WIRE = 0, SHADING_SOLID, SHADING_MATERIAL, SHADING_RENDERED };
@@ -264,7 +263,6 @@ extern bool showGizmos;
 
 inline constexpr float DRAG_THRESHOLD = 3.0f;
 
-extern GameEditorMode currentEditorMode;
 extern EditorMode currentMode;
 extern GizmoAxis currentGizmoAxis;
 extern vec4 viewportRect;   // x, y, w, h — область 3D-вьюпорта в пикселях окна

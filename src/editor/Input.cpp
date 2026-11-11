@@ -4,6 +4,7 @@
 #include "Settings.h"
 #include "Game.h"
 #include "EditorUI.h"
+#include "Project.h"
 #include "MathUtils.h"
 #include "imgui.h"
 #include <algorithm>
@@ -333,12 +334,14 @@ void processInput(GLFWwindow* window, float deltaTime) {
     ImGuiIO& io = ImGui::GetIO();
     auto pressed = [](ImGuiKey key) { return ImGui::IsKeyPressed(key, false); };
 
-    if (pressed(ImGuiKey_F5)) { if (isPlayMode()) stopPlay(window); else startPlay(window); return; }
+    if (pressed(ImGuiKey_F5) && !io.WantTextInput) { if (isPlayMode()) stopPlay(window); else actionPlay(window); return; }
     if (isPlayMode()) {
         if (pressed(ImGuiKey_Escape)) stopPlay(window);
         return;
     }
     if (io.WantCaptureKeyboard || io.WantTextInput) return;
+    // Горячие клавиши редактирования действуют только там, где есть 3D-вид
+    if (currentWorkspace != WS_MODEL && currentWorkspace != WS_SCENE) return;
 
     bool ctrl = io.KeyCtrl, shift = io.KeyShift, alt = io.KeyAlt;
 
@@ -347,7 +350,7 @@ void processInput(GLFWwindow* window, float deltaTime) {
         if (pressed(ImGuiKey_Y)) performRedo();
         if (pressed(ImGuiKey_S)) { if (shift) actionSaveSceneAs(window); else actionSaveScene(window); }
         if (pressed(ImGuiKey_O)) actionOpenScene(window);
-        if (pressed(ImGuiKey_N)) resetScene();
+        if (pressed(ImGuiKey_N)) newDocument();
         if (pressed(ImGuiKey_A)) actionSelectAll();
         if (pressed(ImGuiKey_C) && !selectedIndices.empty()) {
             clipboardNodes.clear();

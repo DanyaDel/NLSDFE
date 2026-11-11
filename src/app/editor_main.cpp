@@ -33,6 +33,9 @@
 #include "EngineExports.h"
 #include "Renderer.h"
 #include "App.h"
+#include "Project.h"
+#include "Demo.h"
+#include "ScriptSystem.h"
 #include "imgui.h"
 
 namespace fs = std::filesystem;
@@ -41,6 +44,11 @@ namespace fs = std::filesystem;
 struct LaunchOptions {
     std::string openFile;      // сцена для открытия в редакторе
     std::string screenshot;    // --screenshot: сохранить SDF-кадр в .ppm и выйти
+    std::string project;       // --project: папка проекта
+    std::string exportDir;     // --export: собрать игру в папку и выйти
+    bool demo = false;         // --demo: открыть демо-сцену
+    int workspace = -1;        // --workspace 0..4: стартовая вкладка
+    float hold = 0.0f;         // --hold N: поработать N секунд и выйти (дымовой тест интерфейса)
     int benchFrames = 0;       // --bench N: замерить N кадров и выйти
     int benchObjects = 0;      // --bench-objects N: добавить N объектов для нагрузки
     int shadingMode = -1;      // --mode 0..3
@@ -61,7 +69,7 @@ public:
         spdlog::set_pattern("[%T] [%^%l%$] %v");
         spdlog::info("SDF Engine {} starting...", ENGINE_VERSION);
 
-        bool automated = options.benchFrames > 0 || !options.screenshot.empty();
+        bool automated = options.benchFrames > 0 || !options.screenshot.empty() || !options.exportDir.empty() || options.hold > 0.0f;
 
         bool firstRun = !loadSettings(settingsPath());
         if (options.preset >= 0) applyPreset(std::clamp(options.preset, 0, (int)PRESET_ULTRA));
@@ -78,6 +86,14 @@ public:
             applyFirstRunPreset();
             if (!automated) saveSettings(settingsPath());
         }
+
+        // В автоматических прогонах проект по умолчанию не создаём: рабочая папка остаётся чистой
+        nls::registerEngineBindings();
+        if (!options.project.empty()) openProject(options.project);
+        else if (!automated) openProject(editorCfg.projectDir);
+        if (options.demo) { if (project.root.empty()) openProject(editorCfg.projectDir); loadDemoScene(); }
+
+        if (options.workspace >= 0) switchWorkspace((Workspace)std::clamp(options.workspace, 0, (int)WS_COUNT - 1));
 
         if (options.shadingMode >= 0) currentShadingMode = std::clamp(options.shadingMode, 0, 3);
         if (!options.openFile.empty()) PublicLoadNos(options.openFile, false);
@@ -134,31 +150,78 @@ public:
     void* CreateUiTexture(const uint8_t* rgba, int w, int h) { return renderer.createTexture(rgba, w, h); }
     void DestroyUiTexture(void* id) { renderer.destroyTexture(id); }
 
-    // Игра = плеер + шейдеры + сцена game.nos в одной папке
+    // Игра = плеер + шейдеры + сцена game.nos + скомпилированные скрипты в одной папке
     bool ExportGame(const std::string& directory) {
+        exportLog.clear();
+        auto fail = [&](const std::string& message) { exportLog.push_back("ERROR " + message); spdlog::error("Export: {}", message); return false; };
+        auto note = [&](const std::string& message) { exportLog.push_back(message); };
+
+        if (editingModel()) switchWorkspace(currentWorkspace == WS_MODEL ? WS_SCENE : currentWorkspace);
         std::error_code ec;
-        fs::create_directories(directory, ec);
-        if (!fs::is_directory(directory, ec)) return false;
+        fs::path out(directory);
+        fs::create_directories(out, ec);
+        if (!fs::is_directory(out, ec)) return fail("cannot create folder " + directory);
 
         // В игру уходит плеер, а не редактор
         fs::path exe = getExecutablePath();
         fs::path player = exe.parent_path() / ("NLSDFE_Player" + exe.extension().string());
-        if (!fs::exists(player, ec)) { spdlog::error("Export: {} not found next to the editor", player.string()); return false; }
-        fs::copy_file(player, fs::path(directory) / player.filename(), fs::copy_options::overwrite_existing, ec);
-        if (ec) { spdlog::error("Export: cannot copy player: {}", ec.message()); return false; }
-        for (const auto& entry : fs::directory_iterator(getExecutableDir(), ec)) {
-            if (entry.path().extension() == ".spv") fs::copy_file(entry.path(), fs::path(directory) / entry.path().filename(), fs::copy_options::overwrite_existing, ec);
+        if (!fs::exists(player, ec)) return fail(player.string() + " not found next to the editor");
+        fs::copy_file(player, out / player.filename(), fs::copy_options::overwrite_existing, ec);
+        if (ec) return fail("cannot copy player: " + ec.message());
+        note("player    " + player.filename().string());
+
+        // Только те шейдеры, которые грузит рендерер
+        for (const char* shader : { "shader.spv", "composite_vert.spv", "composite_frag.spv", "mesh_vert.spv", "mesh_frag.spv" }) {
+            fs::copy_file(fs::path(getExecutableDir()) / shader, out / shader, fs::copy_options::overwrite_existing, ec);
+            if (ec) return fail(std::string("cannot copy shader ") + shader + ": " + ec.message());
         }
+        note("shaders   5 files");
+
+        // Скрипты уходят байткодом: исходники игре не нужны
+        std::vector<std::string> done;
+        for (const auto& node : sceneGraph) {
+            const std::string& script = node.script.path;
+            if (script.empty() || std::find(done.begin(), done.end(), script) != done.end()) continue;
+            done.push_back(script);
+            std::vector<nls::CompileError> errors;
+            auto program = nls::scripts.load(script, &errors);
+            if (!program) {
+                for (const auto& e : errors) exportLog.push_back("ERROR " + script + ":" + std::to_string(e.line) + ":" + std::to_string(e.column) + ": " + e.message);
+                return fail("script " + script + " does not compile");
+            }
+            fs::path target = (out / project.relative(nls::scripts.resolve(script))).replace_extension(".nlsc");
+            fs::create_directories(target.parent_path(), ec);
+            if (!nls::saveProgram(*program, target.string())) return fail("cannot write " + target.string());
+            note("script    " + fs::relative(target, out, ec).generic_string());
+        }
+
         // Меши кладём рядом со сценой: загрузчик ищет их там, если исходного пути нет
         for (const auto& node : sceneGraph) {
             if (node.meshPath.empty()) continue;
-            fs::copy_file(node.meshPath, fs::path(directory) / fs::path(node.meshPath).filename(), fs::copy_options::overwrite_existing, ec);
+            fs::copy_file(node.meshPath, out / fs::path(node.meshPath).filename(), fs::copy_options::overwrite_existing, ec);
+            note("mesh      " + fs::path(node.meshPath).filename().string());
         }
-        if (!saveScene((fs::path(directory) / "game.nos").string(), captureThumbnail())) return false;
-        saveSettings((fs::path(directory) / settingsPath()).string());
+
+        std::string previousFile = currentLoadedFile;
+        bool saved = saveScene((out / "game.nos").string(), captureThumbnail());
+        currentLoadedFile = previousFile;
+        if (!saved) return fail("cannot write game.nos");
+        note("scene     game.nos (" + std::to_string(sceneGraph.size()) + " objects)");
+
+        // Настройки графики игры: выбранный пресет, не трогая настройки редактора
+        GraphicsSettings editorGfx = gfx;
+        if (project.exportPreset >= 0) applyPreset(project.exportPreset);
+        saveSettings((out / settingsPath()).string());
+        note(std::string("settings  ") + settingsPath() + " (" + presetName(gfx.preset) + ")");
+        gfx = editorGfx;
+
+        note("Done: " + out.string());
         spdlog::info("Game exported to {}", directory);
         return true;
     }
+
+    std::vector<std::string> exportLog;
+    bool exportFailed = false;
 
 private:
     LaunchOptions options;
@@ -185,7 +248,7 @@ private:
         uint64_t totalFrames = 0;
         const int warmupFrames = 30;
         double benchStart = 0.0;
-        bool automated = options.benchFrames > 0 || !options.screenshot.empty();
+        bool automated = options.benchFrames > 0 || !options.screenshot.empty() || !options.exportDir.empty() || options.hold > 0.0f;
         renderer.continuous = options.benchFrames > 0;
 
         while (!glfwWindowShouldClose(window)) {
@@ -212,7 +275,9 @@ private:
             quietFrames = busy ? 0 : quietFrames + 1;
 
             totalFrames++;
-            if (automated) {
+            if (options.hold > 0.0f) {
+                if (glfwGetTime() >= options.hold) break;
+            } else if (automated) {
                 if (totalFrames == (uint64_t)warmupFrames) {
                     benchStart = glfwGetTime();
                     renderStats.gpuMsSum = 0.0; renderStats.gpuMsCount = 0;
@@ -226,6 +291,11 @@ private:
                                      currentShadingMode, presetName(gfx.preset), avgMs, 1000.0 / avgMs, gpuMs);
                     }
                     if (!options.screenshot.empty()) writeScreenshot(options.screenshot);
+                    if (!options.exportDir.empty()) {
+                        bool ok = ExportGame(options.exportDir);
+                        for (const auto& line : exportLog) spdlog::info("export: {}", line);
+                        if (!ok) exportFailed = true;
+                    }
                     break;
                 }
             }
@@ -243,6 +313,7 @@ void Engine_LoadMesh(const std::string& path) { if (g_engine) engine()->LoadMesh
 void* Engine_CreateUiTexture(const uint8_t* rgba, int w, int h) { return g_engine ? engine()->CreateUiTexture(rgba, w, h) : nullptr; }
 void Engine_DestroyUiTexture(void* textureId) { if (g_engine) engine()->DestroyUiTexture(textureId); }
 bool Engine_ExportGame(const std::string& directory) { return g_engine && engine()->ExportGame(directory); }
+const std::vector<std::string>& Engine_ExportLog() { static const std::vector<std::string> empty; return g_engine ? engine()->exportLog : empty; }
 
 static void printUsage() {
     std::cout <<
@@ -251,6 +322,11 @@ static void printUsage() {
         "  --mode <0..3>          shading: 0 Wire, 1 Solid, 2 Material, 3 Rendered\n"
         "  --gpu <index>          pick a GPU (-1 = auto)\n"
         "  --no-vsync             uncapped frame rate\n"
+        "  --project <dir>        open a project folder (assets/, scenes/, scripts/)\n"
+        "  --demo                 load the demo scene with physics and scripts\n"
+        "  --export <dir>         export the game to a folder and exit\n"
+        "  --workspace <0..4>     start in Import, Model, Scene, Script or Export\n"
+        "  --hold <seconds>       run for a while and exit (UI smoke test)\n"
         "  --bench <frames>       measure average frame time and exit\n"
         "  --bench-objects <n>    add n objects to the scene for --bench\n"
         "  --screenshot <out.ppm> save the SDF frame and exit\n"
@@ -268,6 +344,11 @@ int main(int argc, char** argv) {
             else if (a == "--mode") opts.shadingMode = std::stoi(next());
             else if (a == "--gpu") opts.gpu = std::stoi(next());
             else if (a == "--no-vsync") opts.noVsync = true;
+            else if (a == "--project") opts.project = next();
+            else if (a == "--demo") opts.demo = true;
+            else if (a == "--workspace") opts.workspace = std::stoi(next());
+            else if (a == "--hold") opts.hold = std::stof(next());
+            else if (a == "--export") opts.exportDir = next();
             else if (a == "--bench") opts.benchFrames = std::stoi(next());
             else if (a == "--bench-objects") opts.benchObjects = std::stoi(next());
             else if (a == "--screenshot") opts.screenshot = next();
@@ -276,7 +357,7 @@ int main(int argc, char** argv) {
         }
     } catch (const std::exception& x) { std::cerr << x.what() << "\n"; printUsage(); return EXIT_FAILURE; }
 
-    try { Engine e; e.run(opts); }
+    try { Engine e; e.run(opts); if (e.exportFailed) return EXIT_FAILURE; }
     catch (const std::exception& x) {
         spdlog::critical("CRITICAL ERROR: {}", x.what());
         #ifdef _WIN32

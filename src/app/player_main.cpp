@@ -54,6 +54,7 @@ public:
         renderer.drawGrid = false;
         updateSceneCaches();
         play.standalone = true;
+        play.mouseLook = !automated;
         startPlay(window);
 
         int frame = 0;

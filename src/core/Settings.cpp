@@ -71,7 +71,7 @@ bool loadSettings(const std::string& path) {
             else if (k == "snapAngleDeg") editorCfg.snapAngleDeg = std::stof(v);
             else if (k == "fovDeg") editorCfg.fovDeg = std::stof(v);
             else if (k == "showStats") editorCfg.showStats = std::stoi(v) != 0;
-            else if (k == "assetDir") editorCfg.assetDir = v;
+            else if (k == "projectDir") editorCfg.projectDir = v;
             else if (k == "lastVersion") editorCfg.lastVersion = v;
         } catch (...) {}
     }
@@ -113,6 +113,6 @@ void saveSettings(const std::string& path) {
     f << "snapAngleDeg=" << editorCfg.snapAngleDeg << "\n";
     f << "fovDeg=" << editorCfg.fovDeg << "\n";
     f << "showStats=" << editorCfg.showStats << "\n";
-    f << "assetDir=" << editorCfg.assetDir << "\n";
+    f << "projectDir=" << editorCfg.projectDir << "\n";
     f << "lastVersion=" << editorCfg.lastVersion << "\n";
 }

@@ -21,7 +21,6 @@ Notification toast;
 std::string currentLoadedFile = "Untitled";
 NosHeader lastLoadedHeader = {};
 
-GameEditorMode currentEditorMode = EDITOR_OBJECT;
 EditorMode currentMode = MODE_MOVE;
 GizmoAxis currentGizmoAxis = AXIS_NONE;
 vec4 viewportRect = {0, 0, (float)INITIAL_WIDTH, (float)INITIAL_HEIGHT};

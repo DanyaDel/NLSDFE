@@ -153,6 +153,7 @@ void startPlay(GLFWwindow* window) {
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     if (glfwRawMouseMotionSupported()) glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
     glfwGetCursorPos(window, &play.lastMouseX, &play.lastMouseY);
+    play.mouseSettle = 3;
     play.active = true;
     cameraOverrideBasis = getPlayCameraBasis();
     cameraOverride = true;
@@ -178,9 +179,13 @@ void updatePlay(GLFWwindow* window, float deltaTime) {
     float dt = std::min(deltaTime, 1.0f / 20.0f);
 
     // Обзор мышью
+    // При захвате курсора система может прислать скачок позиции — первые кадры его пропускаем
     double mx, my; glfwGetCursorPos(window, &mx, &my);
-    play.yaw += (float)(mx - play.lastMouseX) * 0.0025f;
-    play.pitch = std::clamp(play.pitch - (float)(my - play.lastMouseY) * 0.0025f, -1.5f, 1.5f);
+    if (play.mouseSettle > 0) play.mouseSettle--;
+    else if (play.mouseLook) {
+        play.yaw += (float)(mx - play.lastMouseX) * 0.0025f;
+        play.pitch = std::clamp(play.pitch - (float)(my - play.lastMouseY) * 0.0025f, -1.5f, 1.5f);
+    }
     play.lastMouseX = mx; play.lastMouseY = my;
 
     // Скрипты и встроенные поведения

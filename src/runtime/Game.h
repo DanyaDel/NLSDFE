@@ -11,6 +11,8 @@ struct PlayState {
     float yaw = 0.0f, pitch = 0.0f;
     bool grounded = false;
     double lastMouseX = 0.0, lastMouseY = 0.0;
+    int mouseSettle = 0;       // Кадры после захвата курсора, в которые его скачок игнорируется
+    bool mouseLook = true;     // Выключается в автоматических прогонах плеера
 };
 extern PlayState play;
 

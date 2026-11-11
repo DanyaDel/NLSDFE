@@ -133,6 +133,14 @@ target_link_libraries(nls_runtime PUBLIC nls_render nls_physics nls_script)
 add_executable(SDF_Engine
     src/app/editor_main.cpp
     src/editor/EditorUI.cpp
+    src/editor/Panels.cpp
+    src/editor/Project.cpp
+    src/editor/Demo.cpp
+    src/editor/workspaces/ImportWorkspace.cpp
+    src/editor/workspaces/ModelWorkspace.cpp
+    src/editor/workspaces/SceneWorkspace.cpp
+    src/editor/workspaces/ScriptWorkspace.cpp
+    src/editor/workspaces/ExportWorkspace.cpp
     src/editor/EngineBridge.cpp
     src/editor/Input.cpp
     src/editor/FileDialogs.cpp

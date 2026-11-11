@@ -13,7 +13,7 @@ vec3 gravity = {0.0f, -18.0f, 0.0f};
 namespace {
     const float SLOP = 0.005f;              // Допустимое проникновение: гасит дрожание покоящихся тел
     const float CONTACT_MARGIN = 0.01f;     // На таком расстоянии контакт уже учитывается
-    const int SOLVER_ITERATIONS = 8;
+    const int SOLVER_ITERATIONS = 10;
     const int MAX_STEPS_PER_FRAME = 8;
     const float MAX_SPEED = 60.0f;
     const float SLEEP_LINEAR = 0.08f;
@@ -44,6 +44,7 @@ namespace {
         vec3 point, normal;                 // Нормаль выталкивает тело a
         vec3 t1, t2;
         float pen = 0.0f;
+        float gap = 0.0f;                   // Зазор до поверхности, если касания ещё нет
         vec3 velB = {0, 0, 0};              // Скорость поверхности, если b не тело
         float restitution = 0.0f, friction = 0.5f;
         float targetVn = 0.0f;
@@ -244,12 +245,21 @@ namespace {
         c.a = a; c.b = bIdx; c.otherNode = otherNode;
         c.point = point; c.normal = normal;
         c.pen = std::max(-distance, 0.0f);
+        c.gap = std::max(distance, 0.0f);
         c.velB = velB;
         c.restitution = restitution; c.friction = friction;
         vec3 ref = std::abs(normal.y) < 0.9f ? vec3(0, 1, 0) : vec3(1, 0, 0);
         c.t1 = glm::normalize(glm::cross(normal, ref));
         c.t2 = glm::cross(normal, c.t1);
         contacts.push_back(c);
+    }
+
+    // Где брать нормаль контакта. Точка на ребре или в углу тела часто лежит ровно над ребром
+    // опоры, и градиент там смотрит вбок. Сдвиг к центру тела даёт нормаль грани —
+    // без этого ровная стопка одинаковых ящиков разъезжается.
+    vec3 normalProbe(const Body& b, vec3 samplePoint, float sampleRadius) {
+        if (sampleRadius > 0.0f) return samplePoint;
+        return samplePoint + (b.pos - samplePoint) * 0.15f;
     }
 
     void findContacts(const std::vector<KinematicSphere>& kinematics) {
@@ -266,7 +276,7 @@ namespace {
                     vec2 hit = mapList(x, b.nearStatic);
                     float d = hit.x - s.w;
                     if (d >= CONTACT_MARGIN) continue;
-                    vec3 n = gradient(field, x);
+                    vec3 n = gradient(field, normalProbe(b, x, s.w));
                     int other = hit.y >= 0.0f ? (int)gpuObjectCache[(int)hit.y].extra.y : -2;
                     float friction = b.params->friction;
                     addContact(i, -1, other, x - n * s.w, n, d, vec3(0.0f), b.params->restitution, friction);
@@ -286,7 +296,7 @@ namespace {
                     vec3 x = b.pos + r * vec3(s);
                     float d = sdfObject(o.obj, x) - s.w;
                     if (d >= CONTACT_MARGIN) continue;
-                    vec3 n = gradient(field, x);
+                    vec3 n = gradient(field, normalProbe(b, x, s.w));
                     addContact(i, j, o.node, x - n * s.w, n, d, vec3(0.0f),
                                std::max(b.params->restitution, o.params->restitution), std::sqrt(b.params->friction * o.params->friction));
                 }
@@ -318,14 +328,19 @@ namespace {
         return b.invMass + glm::dot(dir, glm::cross(b.invInertiaWorld * glm::cross(r, dir), r));
     }
 
-    void solveContacts() {
+    void solveContacts(float h) {
         // Целевая скорость отскока фиксируется по скорости сближения до решения
         for (Contact& c : contacts) {
             Body& a = bodies[c.a];
             vec3 ra = c.point - a.pos;
             vec3 vRel = pointVelocity(a, ra) - (c.b >= 0 ? pointVelocity(bodies[c.b], c.point - bodies[c.b].pos) : c.velB);
             float vn = glm::dot(vRel, c.normal);
-            c.targetVn = (vn < -1.0f) ? -c.restitution * vn : 0.0f;
+            // Контакт замечается заранее, с зазором. Пока тело до поверхности за этот шаг
+            // не долетает, ему разрешено пройти зазор (иначе оно зависнет над опорой);
+            // быстрый удар отскакивает сразу, с полной скоростью сближения.
+            bool reaches = c.gap <= 0.0f || vn * h <= -c.gap;
+            if (vn < -1.0f && reaches) c.targetVn = -c.restitution * vn;
+            else c.targetVn = c.gap > 0.0f ? -c.gap / h : 0.0f;
             a.touched = true;
             if (c.b >= 0) {
                 bodies[c.b].touched = true;
@@ -334,7 +349,11 @@ namespace {
         }
 
         for (int iter = 0; iter < SOLVER_ITERATIONS; iter++) {
-            for (Contact& c : contacts) {
+            // Контакты решаются по очереди, и первым достаётся больше импульса. Чередуем
+            // направление обхода, чтобы перекос не накапливался в одну сторону
+            // (иначе тело на плоской опоре медленно поворачивается и сползает).
+            for (size_t k = 0; k < contacts.size(); k++) {
+                Contact& c = contacts[(iter & 1) ? contacts.size() - 1 - k : k];
                 Body& a = bodies[c.a];
                 Body* b = c.b >= 0 ? &bodies[c.b] : nullptr;
                 bool aFixed = a.params->sleeping, bFixed = b && b->params->sleeping;
@@ -424,7 +443,7 @@ namespace {
             b.angVel *= 1.0f / (1.0f + b.params->angularDamping * h);
         }
         findContacts(kinematics);
-        solveContacts();
+        solveContacts(h);
         integrate(h);
     }
 
@@ -441,10 +460,20 @@ namespace {
                         if (b.nearStatic.empty()) break;
                         if (mapList(b.pos + r * vec3(s), b.nearStatic).x - s.w < 0.03f) { supported = true; break; }
                     }
-                    // Опорой может быть и другое тело
-                    for (const Contact& c : contacts) {
-                        if (supported) break;
-                        if (c.b >= 0 && (c.a == self || c.b == self)) supported = true;
+                    // Опорой может быть и другое тело, в том числе спящее
+                    for (int j = 0; j < (int)bodies.size() && !supported; j++) {
+                        if (j == self) continue;
+                        const Body& o = bodies[j];
+                        float reach = b.radius + o.radius + 0.03f;
+                        vec3 delta = b.pos - o.pos;
+                        if (glm::dot(delta, delta) > reach * reach) continue;
+                        for (const vec4& s : b.samples) {
+                            if (sdfObject(o.obj, b.pos + r * vec3(s)) - s.w < 0.03f) { supported = true; break; }
+                        }
+                        for (const vec4& s : o.samples) {
+                            if (supported) break;
+                            if (sdfObject(b.obj, o.pos + glm::mat3_cast(o.rot) * vec3(s)) - s.w < 0.03f) supported = true;
+                        }
                     }
                 }
                 if (b.disturbed || !supported) { p.sleeping = false; p.sleepTimer = 0.0f; }
