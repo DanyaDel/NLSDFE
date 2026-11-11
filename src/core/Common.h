@@ -64,6 +64,7 @@ struct MeshData {
 
 // position.w хранит тип узла
 enum NodeType {
+    NODE_CAMERA = -3,  // Камера: через неё смотрит Play Mode
     NODE_LIGHT = -2,   // Точечный свет
     NODE_EMPTY = -1,   // Пустышка / контейнер / полигональный меш
     SDF_SPHERE = 0,
@@ -96,7 +97,7 @@ struct GpuObject {
     vec4 scale;  // xyz, w = доп. параметр формы
     vec4 color;  // rgb, w = roughness
     vec4 bound;  // xyz = полуразмеры ограничивающего бокса (с запасом), w = metallic
-    vec4 extra;  // x = выделен, y = индекс узла в sceneGraph
+    vec4 extra;  // x = выделен, y = индекс узла в sceneGraph, z = 1 — первый в CSG-цепочке (всегда объединение)
 };
 
 struct GpuLight {
@@ -124,6 +125,41 @@ struct RigidBody {
     vec3 angularVelocity = {0, 0, 0};
     bool sleeping = false;         // Неподвижные тела не считаются, пока их не потревожат
     float sleepTimer = 0.0f;
+};
+
+// Коллайдер: чем узел участвует в столкновениях
+enum ColliderShape {
+    COLLIDER_SHAPE = 0,   // Собственная SDF-форма узла (точно, с учётом CSG); у узлов без формы — ничего
+    COLLIDER_BOX,
+    COLLIDER_SPHERE,
+    COLLIDER_CAPSULE,
+    COLLIDER_NONE,        // Сквозь узел можно пройти
+    COLLIDER_COUNT
+};
+struct Collider {
+    int shape = COLLIDER_SHAPE;
+    vec3 size = {1, 1, 1};   // Множитель к габаритам узла для Box / Sphere / Capsule
+};
+
+struct AudioSource {
+    bool enabled = false;
+    std::string clip;            // Звуковой файл (.wav, .mp3, .flac) относительно проекта
+    float volume = 1.0f;
+    bool loop = false;
+    bool playOnStart = true;
+    bool spatial = true;         // Громкость зависит от расстояния до камеры
+    float range = 15.0f;
+};
+
+// Управление узлом с клавиатуры и мыши в Play Mode (WASD, прыжок, обзор)
+struct CharacterController {
+    bool enabled = false;
+    float walkSpeed = 4.0f;
+    float runSpeed = 7.5f;
+    float jumpSpeed = 6.5f;
+    float radius = 0.4f;
+    float height = 1.6f;
+    bool mouseLook = true;       // Мышь поворачивает узел, а дочернюю камеру наклоняет
 };
 
 // Значение переменной скрипта, заданное в инспекторе
@@ -173,6 +209,10 @@ struct SceneNode {
 
     RigidBody body;
     ScriptRef script;
+    Collider collider;
+    AudioSource audio;
+    CharacterController controller;
+    float cameraFov = 60.0f;     // Для NODE_CAMERA, градусы по вертикали
 
     SceneNode() {
         gpuData.invRotation = mat4(1.0f);
@@ -274,6 +314,7 @@ extern std::vector<int> selectedIndices;
 extern std::vector<SceneNode> clipboardNodes;
 extern std::vector<GpuObject> gpuObjectCache;   // Обновляется updateSceneCaches()
 extern std::vector<GpuLight> gpuLightCache;
+extern std::vector<GpuObject> collisionCache;   // Коллайдеры: с этим полем работают физика и персонажи
 extern std::vector<MeshData> meshCache;
 extern Notification toast;
 extern std::string currentLoadedFile;
@@ -285,6 +326,7 @@ void showToast(std::string text);
 // Play Mode подменяет камеру редактора своей (см. runtime/Game.cpp)
 extern bool cameraOverride;
 extern CameraBasis cameraOverrideBasis;
+extern float cameraOverrideFov;   // Градусы; 0 — поле зрения редактора
 CameraBasis getCameraBasis();
 float getCameraFocalLength();
 bool projectWorldToScreen(vec3 worldPos, vec2& outScreen);

@@ -36,6 +36,16 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(vma)
 
+# --- miniaudio (один заголовок) ---
+FetchContent_Declare(
+  miniaudio
+  URL https://github.com/mackron/miniaudio/archive/refs/tags/0.11.21.zip
+)
+FetchContent_GetProperties(miniaudio)
+if(NOT miniaudio_POPULATED)
+  FetchContent_Populate(miniaudio)
+endif()
+
 # --- spdlog ---
 FetchContent_Declare(
   spdlog
@@ -88,7 +98,7 @@ target_link_libraries(imgui PUBLIC ${NLS_VULKAN_LIBS} glfw)
 
 # =====================================================================
 # Модули движка. Зависимости идут строго в одну сторону:
-#   core <- scene <- physics, script <- render <- runtime <- (editor | player)
+#   core <- scene, audio <- physics <- script <- render <- runtime <- (editor | player)
 # Редактор не входит ни в одну библиотеку.
 # =====================================================================
 
@@ -107,6 +117,13 @@ add_library(nls_physics STATIC src/physics/Physics.cpp)
 target_include_directories(nls_physics PUBLIC src/physics)
 target_link_libraries(nls_physics PUBLIC nls_scene)
 
+# audio: звук через miniaudio
+add_library(nls_audio STATIC src/audio/Audio.cpp)
+target_include_directories(nls_audio PUBLIC src/audio PRIVATE ${miniaudio_SOURCE_DIR})
+target_link_libraries(nls_audio PUBLIC nls_core ${CMAKE_DL_LIBS})
+find_package(Threads REQUIRED)
+target_link_libraries(nls_audio PUBLIC Threads::Threads)
+
 # script: язык NLS (компилятор, VM) и привязки к движку
 add_library(nls_script STATIC
     src/script/Lexer.cpp
@@ -117,7 +134,7 @@ add_library(nls_script STATIC
     src/script/ScriptSystem.cpp
 )
 target_include_directories(nls_script PUBLIC src/script)
-target_link_libraries(nls_script PUBLIC nls_scene nls_physics)
+target_link_libraries(nls_script PUBLIC nls_scene nls_physics nls_audio)
 
 # render: Vulkan-рендерер и ImGui
 add_library(nls_render STATIC src/render/Renderer.cpp)

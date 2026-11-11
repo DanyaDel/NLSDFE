@@ -1,6 +1,7 @@
 #include "ScriptSystem.h"
 #include "Scene.h"
 #include "Physics.h"
+#include "Audio.h"
 #include <cmath>
 #include <algorithm>
 
@@ -68,6 +69,7 @@ void registerEngineBindings() {
     r.property("size", T::Float, NODE_GET(Value::Float(n->gpuData.params.x)), NODE_SET(n->gpuData.params.x = std::max(a[1].f, 0.001f)));
     r.property("parent", T::Node, NODE_GET(Value::Int(n->parent)));
     r.property("running", T::Bool, NODE_GET(Value::Int(n->behaviorOn ? 1 : 0)), NODE_SET(n->behaviorOn = a[1].i != 0));
+    r.property("fov", T::Float, NODE_GET(Value::Float(n->cameraFov)), NODE_SET(n->cameraFov = std::clamp(a[1].f, 10.0f, 150.0f)));
     r.property("lightIntensity", T::Float, NODE_GET(Value::Float(n->lightIntensity)), NODE_SET(n->lightIntensity = std::max(a[1].f, 0.0f)));
 
     // Твёрдое тело
@@ -116,8 +118,13 @@ void registerEngineBindings() {
     r.function("input.pressed", T::Bool, {T::String}, FN(r = Value::Int(host.keyPressed && host.keyPressed(vm.string(a[0])) ? 1 : 0)));
     r.function("time.now", T::Float, {}, FN(r = Value::Float(host.time)));
     r.function("time.delta", T::Float, {}, FN(r = Value::Float(host.delta)));
-    r.function("player.position", T::Vec3, {}, FN(r = val(host.playerPosition ? host.playerPosition() : vec3(0.0f))));
-    r.function("player.setPosition", T::Void, {T::Vec3}, FN(if (host.setPlayerPosition) host.setPlayerPosition(vec(a[0]))));
+
+    // ---------------- Звук ----------------
+    r.function("node.playSound", T::Void, {T::Node}, [](VM& vm, Value* a, Value&) { if (nodeOf(vm, a[0]) && host.playSound) host.playSound(a[0].i); });
+    r.function("node.stopSound", T::Void, {T::Node}, [](VM& vm, Value* a, Value&) { if (nodeOf(vm, a[0]) && host.stopSound) host.stopSound(a[0].i); });
+    r.function("audio.play", T::Void, {T::String, T::Float}, FN(
+        std::string file = host.resolvePath ? host.resolvePath(vm.string(a[0])) : vm.string(a[0]);
+        audio::play(file, a[1].f, false, false)));
 
     // ---------------- Физика ----------------
     r.function("physics.raycast", T::Node, {T::Vec3, T::Vec3, T::Float}, FN(

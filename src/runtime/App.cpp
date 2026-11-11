@@ -1,6 +1,7 @@
 #include "App.h"
 #include "Scene.h"
 #include "Settings.h"
+#include "Audio.h"
 #include <fstream>
 #include <stdexcept>
 #include <algorithm>
@@ -44,6 +45,7 @@ void App::initApp(const char* title, bool fixedSize) {
 
 void App::shutdownApp() {
     g_meshLoader = nullptr;
+    audio::shutdown();
     renderer.cleanup();
     glfwDestroyWindow(window);
     glfwTerminate();

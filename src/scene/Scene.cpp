@@ -265,6 +265,12 @@ int createNode(int type, const std::string& name) {
     n.gpuData.params = vec4(1.0f, 0, 0, 0);
     n.gpuData.color = vec4(1, 1, 1, 0.5f);
     n.localPosition = cam.target;
+    if (type == NODE_CAMERA) {
+        // Новая камера встаёт на место вида редактора и смотрит туда же
+        CameraBasis b = getCameraBasis();
+        n.localPosition = b.pos;
+        n.localRotation = { std::asin(std::clamp(b.fwd.y, -1.0f, 1.0f)), std::atan2(-b.fwd.x, -b.fwd.z), 0.0f };
+    }
     if (type == NODE_LIGHT) {
         n.localPosition.y += 2.0f;
         n.gpuData.color = vec4(1.0f, 0.9f, 0.7f, 0.5f);
@@ -298,6 +304,14 @@ void resetScene() {
     addNode("Cube", SDF_BOX, {2.0f, 0.5f, 0}, {1,1,1}, {0.1f, 0.4f, 0.8f});
     addNode("Floor", SDF_BOX, {0, -1.0f, 0}, {8, 0.1f, 8}, {0.2f, 0.2f, 0.2f});
 
+    // Камера, через которую смотрит Play Mode
+    SceneNode camera;
+    camera.name = "Camera";
+    camera.gpuData.position.w = (float)NODE_CAMERA;
+    camera.localPosition = {0.0f, 2.2f, 7.0f};
+    camera.localRotation = {-0.2f, 0.0f, 0.0f};
+    sceneGraph.push_back(camera);
+
     currentLoadedFile = "Untitled";
 }
 
@@ -313,6 +327,7 @@ const char* shapeName(int type) {
         case SDF_CAPSULE: return "Capsule";
         case SDF_CONE: return "Cone";
         case NODE_LIGHT: return "Light";
+        case NODE_CAMERA: return "Camera";
         default: return "Empty";
     }
 }
@@ -388,7 +403,7 @@ vec2 sceneMap(vec3 p) {
     for (int i = 0; i < (int)gpuObjectCache.size(); i++) {
         const GpuObject& o = gpuObjectCache[i];
         vec2 cur(sdfObject(o, p), (float)i);
-        int op = (i == 0) ? OP_UNION : (int)o.rot1.w;
+        int op = (i == 0) ? OP_UNION : (int)o.rot1.w;   // i == 0 — это и есть объект с extra.z = 1
         float k = o.rot2.w;
         if (op == OP_UNION) res = opSmoothUnion(res, cur, k);
         else if (op == OP_SUBTRACT) res = opSmoothSub(cur, res, k);
@@ -409,6 +424,52 @@ vec3 sceneNormal(vec3 p) {
     return len > 1e-8f ? n / len : vec3(0, 1, 0);
 }
 
+vec3 nodeHalfExtents(int nodeIdx, vec3* localCenter) {
+    const SceneNode& node = sceneGraph[nodeIdx];
+    vec3 scl = glm::max(glm::abs(vec3(node.gpuData.scale)), vec3(1e-4f));
+    if (localCenter) *localCenter = vec3(0.0f);
+    if (node.meshIdx >= 0 && node.meshIdx < (int)meshCache.size()) {
+        const MeshData& mesh = meshCache[node.meshIdx];
+        if (localCenter) *localCenter = (mesh.boundsMin + mesh.boundsMax) * 0.5f * scl;
+        return glm::max((mesh.boundsMax - mesh.boundsMin) * 0.5f * scl, vec3(1e-3f));
+    }
+    int type = nodeType(node);
+    if (type >= 0) return shapeHalfExtents(type, node.gpuData.params.x, shapeParam2(type, node.gpuData.rotationEuler.w)) * scl;
+    return vec3(0.5f) * scl;
+}
+
+// Объект поля столкновений для узла с коллайдером Box / Sphere / Capsule
+static GpuObject makeColliderObject(int nodeIdx) {
+    const SceneNode& node = sceneGraph[nodeIdx];
+    const ObjectData& d = node.gpuData;
+    vec3 center;
+    vec3 he = nodeHalfExtents(nodeIdx, &center) * glm::max(glm::abs(node.collider.size), vec3(1e-3f));
+    mat3 rot = glm::transpose(mat3(d.invRotation));
+
+    GpuObject o;
+    int type = SDF_BOX;
+    float size = 1.0f, p2 = 0.0f;
+    vec3 scl = he;
+    if (node.collider.shape == COLLIDER_SPHERE) {
+        type = SDF_SPHERE;
+        scl = vec3(std::max(he.x, std::max(he.y, he.z)));
+    } else if (node.collider.shape == COLLIDER_CAPSULE) {
+        float r = std::max(he.x, he.z);
+        float halfSegment = he.y - r;
+        if (halfSegment > 0.01f * r) { type = SDF_CAPSULE; scl = vec3(r); size = halfSegment / r; p2 = r / halfSegment; }
+        else { type = SDF_SPHERE; scl = vec3(r); }
+    }
+    o.rot0 = vec4(vec3(d.invRotation[0]), (float)type);
+    o.rot1 = vec4(vec3(d.invRotation[1]), (float)OP_UNION);
+    o.rot2 = vec4(vec3(d.invRotation[2]), 0.001f);
+    o.pos = vec4(vec3(d.position) + rot * center, size);
+    o.scale = vec4(scl, p2);
+    o.color = d.color;
+    o.bound = vec4(shapeHalfExtents(type, size, p2) * scl + vec3(0.26f), 0.0f);
+    o.extra = vec4(0.0f, (float)nodeIdx, 0.0f, 0.0f);
+    return o;
+}
+
 void updateSceneCaches() {
     for (int i = 0; i < (int)sceneGraph.size(); i++) {
         if (sceneGraph[i].parent == -1) updateHierarchy(i, mat4(1.0f));
@@ -416,6 +477,7 @@ void updateSceneCaches() {
 
     gpuObjectCache.clear();
     gpuLightCache.clear();
+    collisionCache.clear();
     for (int i = 0; i < (int)sceneGraph.size(); i++) {
         const SceneNode& node = sceneGraph[i];
         if (!node.worldActive) continue;
@@ -428,8 +490,12 @@ void updateSceneCaches() {
                 l.color = vec4(vec3(node.gpuData.color) * node.lightIntensity, 0.0f);
                 gpuLightCache.push_back(l);
             }
-            continue;
         }
+
+        // Коллайдер, заданный явно, не зависит от того, есть ли у узла видимая форма
+        bool overrideCollider = node.collider.shape == COLLIDER_BOX || node.collider.shape == COLLIDER_SPHERE || node.collider.shape == COLLIDER_CAPSULE;
+        if (overrideCollider && !node.isTrigger && collisionCache.size() < MAX_OBJECTS) collisionCache.push_back(makeColliderObject(i));
+
         if (!isSdfNode(node) || node.isTrigger) continue;
         if (gpuObjectCache.size() >= MAX_OBJECTS) continue;
 
@@ -451,8 +517,14 @@ void updateSceneCaches() {
         // Пересечение режет всё вокруг себя, поэтому отсекать его по лучу нельзя
         vec3 bound = (op == OP_INTERSECT) ? vec3(1e9f) : shapeHalfExtents(type, size, p2) * scl + vec3(k + 0.25f);
         o.bound = vec4(bound, d.params.w);
-        o.extra = vec4(selected ? 1.0f : 0.0f, (float)i, 0, 0);
+        o.extra = vec4(selected ? 1.0f : 0.0f, (float)i, gpuObjectCache.empty() ? 1.0f : 0.0f, 0.0f);
         gpuObjectCache.push_back(o);
+
+        // Коллайдер «по форме»: то же тело, что на экране, вместе с его CSG-операцией
+        if (node.collider.shape == COLLIDER_SHAPE && collisionCache.size() < MAX_OBJECTS) {
+            o.extra.x = 0.0f;
+            collisionCache.push_back(o);
+        }
     }
 }
 
@@ -544,7 +616,7 @@ std::function<int(const std::string&)> g_meshLoader;
 
 namespace {
     const uint32_t NOS_VERSION = 200;
-    const uint32_t NOSX_VERSION = 2;   // 2: твёрдые тела и скрипты
+    const uint32_t NOSX_VERSION = 3;   // 2: твёрдые тела и скрипты; 3: коллайдер, звук, контроллер, камера
 
     template <typename T> void writePod(std::ostream& f, const T& v) { f.write(reinterpret_cast<const char*>(&v), sizeof(T)); }
     template <typename T> bool readPod(std::istream& f, T& v) { f.read(reinterpret_cast<char*>(&v), sizeof(T)); return (bool)f; }
@@ -603,6 +675,15 @@ bool saveScene(const std::string& path, const std::vector<uint8_t>& thumbnailRgb
             writeString(file, v.name); writePod(file, (int32_t)v.type); writePod(file, v.value);
             writeString(file, v.text); writePod(file, (int32_t)v.node);
         }
+        // --- версия 3 ---
+        writePod(file, (int32_t)node.collider.shape); writePod(file, node.collider.size);
+        const AudioSource& a = node.audio;
+        writePod(file, (uint8_t)a.enabled); writeString(file, a.clip); writePod(file, a.volume);
+        writePod(file, (uint8_t)a.loop); writePod(file, (uint8_t)a.playOnStart); writePod(file, (uint8_t)a.spatial); writePod(file, a.range);
+        const CharacterController& c = node.controller;
+        writePod(file, (uint8_t)c.enabled); writePod(file, c.walkSpeed); writePod(file, c.runSpeed); writePod(file, c.jumpSpeed);
+        writePod(file, c.radius); writePod(file, c.height); writePod(file, (uint8_t)c.mouseLook);
+        writePod(file, node.cameraFov);
     }
     writePod(file, world.sunAzimuth); writePod(file, world.sunElevation); writePod(file, world.sunIntensity);
     writePod(file, world.sunColor); writePod(file, world.skyTop); writePod(file, world.skyHorizon); writePod(file, world.ambient);
@@ -663,6 +744,19 @@ bool loadScene(const std::string& path, bool append) {
                     var.type = std::clamp(type, 0, (int)SVAR_NODE); var.node = nodeRef;
                     n.script.vars.push_back(var);
                 }
+            }
+            if (ok && extVersion >= 3) {
+                int32_t shape = 0; uint8_t flags[7] = {};
+                AudioSource& a = n.audio; CharacterController& c = n.controller;
+                ok = readPod(file, shape) && readPod(file, n.collider.size)
+                  && readPod(file, flags[0]) && readString(file, a.clip) && readPod(file, a.volume)
+                  && readPod(file, flags[1]) && readPod(file, flags[2]) && readPod(file, flags[3]) && readPod(file, a.range)
+                  && readPod(file, flags[4]) && readPod(file, c.walkSpeed) && readPod(file, c.runSpeed) && readPod(file, c.jumpSpeed)
+                  && readPod(file, c.radius) && readPod(file, c.height) && readPod(file, flags[5])
+                  && readPod(file, n.cameraFov);
+                n.collider.shape = std::clamp(shape, 0, (int)COLLIDER_COUNT - 1);
+                a.enabled = flags[0]; a.loop = flags[1]; a.playOnStart = flags[2]; a.spatial = flags[3];
+                c.enabled = flags[4]; c.mouseLook = flags[5];
             }
             if (!ok) break;
             n.active = active != 0; n.isTrigger = isTrigger != 0; n.behaviorOn = behaviorOn != 0;

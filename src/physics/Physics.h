@@ -7,23 +7,32 @@
 // тело — его SDF-примитив, контакты ищутся точками на поверхности тела.
 namespace physics {
 
-    inline constexpr int PLAYER_ID = -1;        // «Другой участник» в событиях, когда это игрок
     inline constexpr float FIXED_STEP = 1.0f / 120.0f;
 
     extern vec3 gravity;
 
-    // Сфера, которой управляет не физика (игрок): толкает тела и входит в триггеры
+    // Сфера, которой управляет не физика (часть капсулы персонажа): толкает тела и входит в триггеры
     struct KinematicSphere {
         vec3 center;
         float radius;
         vec3 velocity;
-        int id = PLAYER_ID;
+        int node = -1;      // Узел-владелец: приходит в события как «другой участник»
+    };
+
+    // Капсула персонажа (компонент Character Controller): position — её центр
+    struct Character {
+        int node = -1;
+        vec3 position = {0, 0, 0};
+        vec3 velocity = {0, 0, 0};
+        float radius = 0.4f;
+        float height = 1.6f;
+        bool grounded = false;
     };
 
     struct Events {
-        // a — динамическое тело; b — узел, с которым оно столкнулось, либо PLAYER_ID
+        // a — динамическое тело; b — узел, с которым оно столкнулось
         std::function<void(int a, int b, vec3 point, vec3 normal, float speed)> onCollide;
-        // other — тело или PLAYER_ID
+        // other — узел тела или персонажа
         std::function<void(int trigger, int other, bool entered)> onTrigger;
     };
 
@@ -48,5 +57,10 @@ namespace physics {
     void setVelocity(int node, vec3 velocity);
     void wake(int node);
 
+    // Луч по коллайдерам сцены
     bool raycast(vec3 origin, vec3 direction, float maxDistance, RayHit& hit);
+
+    // Двигает капсулу персонажа: гравитация, выталкивание из геометрии, опора под ногами.
+    // Сталкивается со всеми коллайдерами, кроме принадлежащих самому узлу и его детям.
+    void moveCharacter(Character& character, float dt);
 }

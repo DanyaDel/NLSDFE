@@ -12,8 +12,10 @@ void runSceneTests() {
     TEST_SECTION("scene: hierarchy and SDF");
     resetScene();
     updateSceneCaches();
-    CHECK(sceneGraph.size() == 3);
+    CHECK(sceneGraph.size() == 4);   // Сфера, куб, пол и камера
     CHECK(gpuObjectCache.size() == 3);
+    CHECK(collisionCache.size() == 3);
+    CHECK(nodeType(sceneGraph[3]) == NODE_CAMERA);
     // Сфера радиуса 1 в (0, 0.5, 0): в центре -1, на поверхности 0
     CHECK_NEAR(sdfObject(gpuObjectCache[0], vec3(0, 0.5f, 0)), -1.0, 1e-4);
     CHECK_NEAR(sdfObject(gpuObjectCache[0], vec3(0, 2.5f, 0)), 1.0, 1e-4);
@@ -51,6 +53,12 @@ void runSceneTests() {
     sceneGraph[0].active = false;
     sceneGraph[child].behavior = BEHAVIOR_ROTATE;
     sceneGraph[child].behaviorSpeed = 3.5f;
+    sceneGraph[child].collider.shape = COLLIDER_CAPSULE;
+    sceneGraph[child].audio.enabled = true;
+    sceneGraph[child].audio.clip = "sounds/beep.wav";
+    sceneGraph[child].controller.enabled = true;
+    sceneGraph[child].controller.walkSpeed = 2.5f;
+    sceneGraph[3].cameraFov = 75.0f;
     world.sunIntensity = 1.25f;
     updateSceneCaches();
     std::vector<SceneNode> saved = sceneGraph;
@@ -67,6 +75,11 @@ void runSceneTests() {
         CHECK(sceneGraph[child].parent == 1);
         CHECK(sceneGraph[child].behavior == BEHAVIOR_ROTATE);
         CHECK_NEAR(sceneGraph[child].behaviorSpeed, 3.5, 1e-6);
+        CHECK(sceneGraph[child].collider.shape == COLLIDER_CAPSULE);
+        CHECK(sceneGraph[child].audio.enabled && sceneGraph[child].audio.clip == "sounds/beep.wav");
+        CHECK(sceneGraph[child].controller.enabled);
+        CHECK_NEAR(sceneGraph[child].controller.walkSpeed, 2.5, 1e-6);
+        CHECK_NEAR(sceneGraph[3].cameraFov, 75.0, 1e-6);
         CHECK_NEAR(sceneGraph[child].localPosition.x, 1.0, 1e-6);
         CHECK_NEAR(sceneGraph[1].localRotation.y, 1.5707963, 1e-5);
     }

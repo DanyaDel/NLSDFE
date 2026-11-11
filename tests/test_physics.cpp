@@ -5,7 +5,7 @@
 // Пол (верхняя грань на y = -0.9) плюс то, что добавит тест
 static void emptyWorld() {
     resetScene();
-    sceneGraph.erase(sceneGraph.begin(), sceneGraph.begin() + 2);   // Остаётся только Floor
+    sceneGraph.erase(sceneGraph.begin(), sceneGraph.begin() + 2);   // Остаются Floor и Camera
     spdlog::set_level(spdlog::level::warn);
     physics::reset();
 }
@@ -153,9 +153,59 @@ void runPhysicsTests() {
     box = addBody(SDF_BOX, {0, floorTop + 0.5f, 0}, vec3(0.5f));
     simulate(2.0f);
     CHECK(sceneGraph[box].body.sleeping);
-    std::vector<physics::KinematicSphere> pusher = { { vec3(-0.8f, floorTop + 0.5f, 0), 0.4f, vec3(2, 0, 0), physics::PLAYER_ID } };
+    std::vector<physics::KinematicSphere> pusher = { { vec3(-0.8f, floorTop + 0.5f, 0), 0.4f, vec3(2, 0, 0), -1 } };
     simulate(0.5f, {}, pusher);
     CHECK(sceneGraph[box].localPosition.x > 0.05f);
+
+    TEST_SECTION("physics: colliders");
+    emptyWorld();
+    {
+        // Сфера с коллайдером-боксом: ящик сверху встаёт на высоту бокса, а не шара
+        SceneNode ball;
+        ball.name = "Pedestal";
+        ball.gpuData.position.w = (float)SDF_SPHERE;
+        ball.gpuData.params = vec4(1.0f, 0, 0.001f, 0);
+        ball.localPosition = {0, floorTop + 0.5f, 0};
+        ball.localScale = vec3(0.5f);
+        ball.collider.shape = COLLIDER_BOX;
+        sceneGraph.push_back(ball);
+        int pedestal = (int)sceneGraph.size() - 1;
+        int crate = addBody(SDF_BOX, {0.35f, floorTop + 1.6f, 0.35f}, vec3(0.2f));
+        simulate(3.0f);
+        CHECK_NEAR(sceneGraph[crate].localPosition.y, floorTop + 1.0 + 0.2, 0.03);
+        CHECK_NEAR(sceneGraph[crate].localPosition.x, 0.35, 0.05);
+
+        // Без коллайдера сквозь пьедестал проваливаются до пола
+        emptyWorld();
+        ball.collider.shape = COLLIDER_NONE;
+        sceneGraph.push_back(ball);
+        crate = addBody(SDF_BOX, {0, floorTop + 1.6f, 0}, vec3(0.2f));
+        simulate(3.0f);
+        CHECK_NEAR(sceneGraph[crate].localPosition.y, floorTop + 0.2, 0.03);
+        (void)pedestal;
+    }
+
+    TEST_SECTION("physics: character capsule");
+    emptyWorld();
+    {
+        updateSceneCaches();
+        physics::Character c;
+        c.position = {0, 2, 0};
+        for (int i = 0; i < 120; i++) physics::moveCharacter(c, 1.0f / 60.0f);
+        CHECK(c.grounded);
+        CHECK_NEAR(c.position.y, floorTop + 0.8, 0.02);          // Капсула высотой 1.6 стоит на полу
+        // Идёт в стену и останавливается перед ней
+        SceneNode wall;
+        wall.gpuData.position.w = (float)SDF_BOX;
+        wall.gpuData.params = vec4(1.0f, 0, 0.001f, 0);
+        wall.localPosition = {3, 0, 0};
+        wall.localScale = {0.2f, 3.0f, 3.0f};
+        sceneGraph.push_back(wall);
+        updateSceneCaches();
+        for (int i = 0; i < 180; i++) { c.velocity.x = 4.0f; physics::moveCharacter(c, 1.0f / 60.0f); }
+        CHECK_NEAR(c.position.x, 3.0 - 0.2 - 0.4, 0.03);
+        CHECK_NEAR(c.position.z, 0.0, 0.05);                     // Вдоль стены не сползает
+    }
 
     TEST_SECTION("physics: raycast");
     emptyWorld();

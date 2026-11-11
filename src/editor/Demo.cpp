@@ -40,8 +40,9 @@ void loadDemoScene() {
         "    self.rotation.y += speed * dt\n"
         "}\n");
     writeScript("ball.nls",
-        "// Changes colour on every hit and jumps when you press E nearby\n"
+        "// Changes colour on every hit and jumps when the player presses E nearby\n"
         "var jump: float = 6.0\n"
+        "var player: node\n"
         "var hits = 0\n"
         "\n"
         "on start() {\n"
@@ -54,7 +55,7 @@ void loadDemoScene() {
         "}\n"
         "\n"
         "on update(dt: float) {\n"
-        "    if input.pressed(\"e\") and distance(player.position(), self.worldPosition) < 3.0 {\n"
+        "    if player != null and input.pressed(\"e\") and self.distanceTo(player) < 3.0 {\n"
         "        self.applyImpulse(vec3(0, jump * self.mass, 0))\n"
         "    }\n"
         "}\n");
@@ -80,6 +81,7 @@ void loadDemoScene() {
 
     nls::registerEngineBindings();
     resetScene();
+    sceneGraph.erase(sceneGraph.begin() + 3);                       // Камеру по умолчанию заменит камера игрока
     sceneGraph.erase(sceneGraph.begin(), sceneGraph.begin() + 2);   // Остаётся пол
     sceneGraph[0].gpuData.color = vec4(0.35f, 0.37f, 0.4f, 0.9f);
     sceneGraph[0].localScale = {14.0f, 0.1f, 14.0f};   // С запасом: игрок появляется на месте камеры и не должен упасть мимо
@@ -115,6 +117,16 @@ void loadDemoScene() {
     sceneGraph[zone].isTrigger = true;
     attach(zone, "launcher.nls");
     for (auto& v : sceneGraph[zone].script.vars) if (v.name == "target") v.node = ball;
+
+    // Игрок: пустышка с контроллером и камерой на уровне глаз. Тело невидимо,
+    // иначе камера оказалась бы внутри собственной SDF-формы.
+    int player = add("Player", NODE_EMPTY, {0.0f, 0.0f, 6.0f}, vec3(1.0f), {1, 1, 1});
+    sceneGraph[player].controller.enabled = true;
+    int eyes = add("Player Camera", NODE_CAMERA, {0.0f, 0.6f, 0.0f}, vec3(1.0f), {1, 1, 1});
+    sceneGraph[eyes].cameraFov = 70.0f;
+    reparent(eyes, player);
+    sceneGraph[eyes].localPosition = {0.0f, 0.6f, 0.0f};
+    for (auto& v : sceneGraph[ball].script.vars) if (v.name == "player") v.node = player;
 
     cam = CameraState();
     cam.target = {0.0f, 0.3f, 0.0f};

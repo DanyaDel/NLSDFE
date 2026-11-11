@@ -7,12 +7,13 @@
 
 namespace nls {
 
-// То, что скриптам даёт приложение, а не сцена: ввод, игрок, время
+// То, что скриптам даёт приложение, а не сцена: ввод, звук, время
 struct Host {
     std::function<bool(const std::string& key)> keyDown;      // "w", "space", "shift", "up", "mouse1" ...
     std::function<bool(const std::string& key)> keyPressed;   // Только в кадр нажатия
-    std::function<vec3()> playerPosition;
-    std::function<void(vec3)> setPlayerPosition;
+    std::function<void(int node)> playSound;                  // Звук компонента Audio Source узла
+    std::function<void(int node)> stopSound;
+    std::function<std::string(const std::string&)> resolvePath;   // Путь ассета относительно проекта
     float time = 0.0f;
     float delta = 0.0f;
 };

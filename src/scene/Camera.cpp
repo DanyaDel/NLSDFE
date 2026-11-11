@@ -6,6 +6,7 @@
 // Камера редактора (орбитальная) либо подменённая игровым кодом
 bool cameraOverride = false;
 CameraBasis cameraOverrideBasis = {};
+float cameraOverrideFov = 0.0f;
 
 CameraBasis getCameraBasis() {
     if (cameraOverride) return cameraOverrideBasis;
@@ -25,7 +26,8 @@ CameraBasis getCameraBasis() {
 
 // Одно значение на рендер, выбор объектов и проекцию оверлеев
 float getCameraFocalLength() {
-    return 1.0f / std::tan(glm::radians(editorCfg.fovDeg) * 0.5f);
+    float fov = (cameraOverride && cameraOverrideFov > 0.0f) ? cameraOverrideFov : editorCfg.fovDeg;
+    return 1.0f / std::tan(glm::radians(std::clamp(fov, 10.0f, 150.0f)) * 0.5f);
 }
 
 bool projectWorldToScreen(vec3 worldPos, vec2& outScreen) {

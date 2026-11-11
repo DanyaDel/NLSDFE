@@ -43,6 +43,7 @@ float sdfObject(const GpuObject& o, vec3 p);
 vec2 sceneMap(vec3 p);                                  // x = расстояние, y = индекс в gpuObjectCache
 float sceneDistance(vec3 p);
 vec3 sceneNormal(vec3 p);
+vec3 nodeHalfExtents(int nodeIdx, vec3* localCenter = nullptr);   // Габариты узла в его осях с учётом масштаба
 int pickNode(Ray ray);                                  // Индекс узла под лучом или -1
 
 // --- Материалы ---

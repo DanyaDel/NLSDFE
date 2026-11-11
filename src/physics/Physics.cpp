@@ -32,7 +32,7 @@ namespace {
         float radius = 1.0f;                // Ограничивающая сфера
         float minExtent = 0.1f;
         std::vector<vec4> samples;          // Точки коллайдера в осях тела; w = радиус точки
-        std::vector<int> nearStatic;        // Статические объекты поблизости (индексы gpuObjectCache)
+        std::vector<int> nearStatic;        // Статические коллайдеры поблизости (индексы collisionCache)
         RigidBody* params = nullptr;
         bool touched = false;
         bool disturbed = false;             // В тело въехало что-то движущееся
@@ -56,7 +56,7 @@ namespace {
     std::set<std::pair<int, int>> insidePairs;     // Пары (триггер, участник)
 
     std::vector<Body> bodies;
-    std::vector<int> staticObjects;                // Индексы gpuObjectCache, не принадлежащие телам
+    std::vector<int> staticObjects;                // Индексы collisionCache, не принадлежащие телам
     std::vector<Contact> contacts;
 
     // --- Поле расстояний статического мира ---
@@ -77,9 +77,9 @@ namespace {
     vec2 mapList(vec3 p, const std::vector<int>& list) {
         vec2 res(100.0f, -1.0f);
         for (int i : list) {
-            const GpuObject& o = gpuObjectCache[i];
+            const GpuObject& o = collisionCache[i];
             vec2 cur(sdfObject(o, p), (float)i);
-            int op = (i == 0) ? OP_UNION : (int)o.rot1.w;
+            int op = (o.extra.z > 0.5f) ? OP_UNION : (int)o.rot1.w;   // Первый в CSG-цепочке сцены — всегда объединение
             float k = o.rot2.w;
             if (op == OP_UNION) res = opUnion(res, cur, k);
             else if (op == OP_SUBTRACT) res = opSub(cur, res, k);
@@ -99,10 +99,27 @@ namespace {
         return len > 1e-8f ? n / len : vec3(0, 1, 0);
     }
 
-    bool hasDynamicAncestor(int nodeIdx) {
+    // Коллайдеры тел и персонажей (вместе с их дочерними узлами) движутся сами и в статический мир не входят
+    // Симметричный градиент: в вогнутых углах (стена + пол) не даёт бокового уклона,
+    // из-за которого персонаж сползал бы вдоль стены
+    template <typename F> vec3 gradientCentral(F&& field, vec3 p) {
+        const float e = 0.002f;
+        vec3 n(field(p + vec3(e, 0, 0)) - field(p - vec3(e, 0, 0)),
+               field(p + vec3(0, e, 0)) - field(p - vec3(0, e, 0)),
+               field(p + vec3(0, 0, e)) - field(p - vec3(0, 0, e)));
+        float len = glm::length(n);
+        return len > 1e-8f ? n / len : vec3(0, 1, 0);
+    }
+
+    bool hasMovingAncestor(int nodeIdx) {
         for (int p = nodeIdx; p != -1; p = sceneGraph[p].parent) {
-            if (sceneGraph[p].body.type == BODY_DYNAMIC) return true;
+            if (sceneGraph[p].body.type == BODY_DYNAMIC || sceneGraph[p].controller.enabled) return true;
         }
+        return false;
+    }
+
+    bool isInSubtree(int nodeIdx, int root) {
+        for (int p = nodeIdx; p != -1; p = sceneGraph[p].parent) if (p == root) return true;
         return false;
     }
 
@@ -136,10 +153,12 @@ namespace {
                 s.push_back(vec4(glm::normalize(vec3(x, y, z)) * size * scl, 0.0f));
             }
         } else if (type == SDF_BOX) {
-            // Углы, середины рёбер и центры граней
-            for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) for (int z = -1; z <= 1; z++) {
-                if (x == 0 && y == 0 && z == 0) continue;
-                s.push_back(vec4(vec3(x, y, z) * size * scl, 0.0f));
+            // Сетка 5x5 на каждой грани: опора считается по точкам тела, и редкая сетка
+            // роняла бы ящик, стоящий на краю уступа
+            const int n = 4;
+            for (int x = 0; x <= n; x++) for (int y = 0; y <= n; y++) for (int z = 0; z <= n; z++) {
+                if (x != 0 && x != n && y != 0 && y != n && z != 0 && z != n) continue;
+                s.push_back(vec4((vec3(x, y, z) / (float)n * 2.0f - 1.0f) * size * scl, 0.0f));
             }
         } else if (type == SDF_TORUS) {
             for (int i = 0; i < 10; i++) {
@@ -195,7 +214,7 @@ namespace {
         b.nearStatic.clear();
         float reach = b.radius + margin;
         for (int i : staticObjects) {
-            const GpuObject& o = gpuObjectCache[i];
+            const GpuObject& o = collisionCache[i];
             vec3 local = mat3(vec3(o.rot0), vec3(o.rot1), vec3(o.rot2)) * (b.pos - vec3(o.pos));
             vec3 q = glm::max(glm::abs(local) - vec3(o.bound), vec3(0.0f));
             if (glm::dot(q, q) < reach * reach) b.nearStatic.push_back(i);
@@ -206,13 +225,13 @@ namespace {
     void gather() {
         bodies.clear();
         staticObjects.clear();
-        for (int i = 0; i < (int)gpuObjectCache.size(); i++) {
-            int nodeIdx = (int)gpuObjectCache[i].extra.y;
+        for (int i = 0; i < (int)collisionCache.size(); i++) {
+            int nodeIdx = (int)collisionCache[i].extra.y;
             SceneNode& node = sceneGraph[nodeIdx];
             if (node.body.type == BODY_DYNAMIC) {
                 Body b;
                 b.node = nodeIdx;
-                b.obj = gpuObjectCache[i];
+                b.obj = collisionCache[i];
                 b.params = &node.body;
                 b.pos = vec3(node.gpuData.position);
                 b.rot = glm::normalize(glm::quat_cast(glm::transpose(mat3(node.gpuData.invRotation))));
@@ -221,7 +240,7 @@ namespace {
                 buildSamples(b);
                 refreshPose(b);
                 bodies.push_back(b);
-            } else if (!hasDynamicAncestor(nodeIdx)) {
+            } else if (!hasMovingAncestor(nodeIdx)) {
                 staticObjects.push_back(i);
             }
         }
@@ -277,7 +296,7 @@ namespace {
                     float d = hit.x - s.w;
                     if (d >= CONTACT_MARGIN) continue;
                     vec3 n = gradient(field, normalProbe(b, x, s.w));
-                    int other = hit.y >= 0.0f ? (int)gpuObjectCache[(int)hit.y].extra.y : -2;
+                    int other = hit.y >= 0.0f ? (int)collisionCache[(int)hit.y].extra.y : -2;
                     float friction = b.params->friction;
                     addContact(i, -1, other, x - n * s.w, n, d, vec3(0.0f), b.params->restitution, friction);
                 }
@@ -311,10 +330,47 @@ namespace {
                 float d = sdfObject(b.obj, k.center) - k.radius;
                 if (d >= CONTACT_MARGIN) continue;
                 vec3 outOfBody = gradient(field, k.center);
-                addContact(i, -1, k.id, k.center - outOfBody * (d + k.radius), -outOfBody, d, k.velocity, 0.0f, 0.2f);
+                addContact(i, -1, k.node, k.center - outOfBody * (d + k.radius), -outOfBody, d, k.velocity, 0.0f, 0.2f);
                 if (glm::length(k.velocity) > 0.1f) b.disturbed = true;
             }
         }
+    }
+
+    // Плотная сетка точек даёт десятки контактов на одну грань, а решатель импульсов с таким
+    // избытком сходится плохо (стопки разваливаются). Оставляем от каждой площадки контакта
+    // её края и самую глубокую точку — опорная область при этом не меняется.
+    void reduceContacts() {
+        struct Manifold { int a, b; vec3 normal; std::vector<int> items; };
+        std::vector<Manifold> manifolds;
+        for (int i = 0; i < (int)contacts.size(); i++) {
+            const Contact& c = contacts[i];
+            Manifold* target = nullptr;
+            for (Manifold& m : manifolds) {
+                if (m.a == c.a && m.b == c.b && glm::dot(m.normal, c.normal) > 0.9f && (c.b >= 0 || contacts[m.items[0]].otherNode == c.otherNode)) { target = &m; break; }
+            }
+            if (!target) { manifolds.push_back({c.a, c.b, c.normal, {}}); target = &manifolds.back(); }
+            target->items.push_back(i);
+        }
+
+        std::vector<Contact> kept;
+        for (const Manifold& m : manifolds) {
+            if (m.items.size() <= 5) { for (int i : m.items) kept.push_back(contacts[i]); continue; }
+            const Contact& first = contacts[m.items[0]];
+            int pick[5] = { m.items[0], m.items[0], m.items[0], m.items[0], m.items[0] };
+            float best[5] = { -1e9f, -1e9f, -1e9f, -1e9f, -1e9f };
+            for (int i : m.items) {
+                const Contact& c = contacts[i];
+                float u = glm::dot(c.point, first.t1), v = glm::dot(c.point, first.t2);
+                float score[5] = { u + v, u - v, v - u, -u - v, c.pen - c.gap };   // Четыре угла площадки и самая глубокая точка
+                for (int k = 0; k < 5; k++) if (score[k] > best[k]) { best[k] = score[k]; pick[k] = i; }
+            }
+            for (int k = 0; k < 5; k++) {
+                bool duplicate = false;
+                for (int j = 0; j < k; j++) if (pick[j] == pick[k]) duplicate = true;
+                if (!duplicate) kept.push_back(contacts[pick[k]]);
+            }
+        }
+        contacts.swap(kept);
     }
 
     vec3 pointVelocity(const Body& b, vec3 r) { return b.vel + glm::cross(b.angVel, r); }
@@ -443,6 +499,7 @@ namespace {
             b.angVel *= 1.0f / (1.0f + b.params->angularDamping * h);
         }
         findContacts(kinematics);
+        reduceContacts();
         solveContacts(h);
         integrate(h);
     }
@@ -494,7 +551,7 @@ namespace {
         if (simulated) {
             std::set<std::pair<int, int>> now;
             for (const Contact& c : contacts) {
-                if (c.otherNode < PLAYER_ID) continue;
+                if (c.otherNode < 0) continue;
                 std::pair<int, int> key(bodies[c.a].node, c.otherNode);
                 bool known = touchingPairs.count(key) > 0;
                 if (!known && c.accN <= 0.0f) continue;   // Рядом, но удара ещё не было
@@ -517,7 +574,7 @@ namespace {
                 return local.x <= half.x && local.y <= half.y && local.z <= half.z;
             };
             for (const Body& b : bodies) if (contains(b.pos)) inside.insert({t, b.node});
-            for (const KinematicSphere& k : kinematics) if (contains(k.center)) inside.insert({t, k.id});
+            for (const KinematicSphere& k : kinematics) if (contains(k.center)) inside.insert({t, k.node});
         }
         if (events.onTrigger) {
             for (const auto& pair : inside) if (!insidePairs.count(pair)) events.onTrigger(pair.first, pair.second, true);
@@ -581,20 +638,61 @@ bool raycast(vec3 origin, vec3 direction, float maxDistance, RayHit& hit) {
     float len = glm::length(direction);
     if (len < 1e-8f) return false;
     direction /= len;
+    std::vector<int> all(collisionCache.size());
+    for (int i = 0; i < (int)all.size(); i++) all[i] = i;
+    auto field = [&](vec3 p) { return mapList(p, all).x; };
     float t = 0.02f;
     for (int i = 0; i < 200 && t < maxDistance; i++) {
         vec3 p = origin + direction * t;
-        vec2 r = sceneMap(p);
+        vec2 r = mapList(p, all);
         if (r.x < 0.0005f + 0.001f * t) {
             hit.distance = t;
             hit.point = p;
-            hit.normal = sceneNormal(p);
-            hit.node = r.y >= 0.0f ? (int)gpuObjectCache[(int)r.y].extra.y : -1;
+            hit.normal = gradient(field, p);
+            hit.node = r.y >= 0.0f ? (int)collisionCache[(int)r.y].extra.y : -1;
             return true;
         }
         t += r.x;
     }
     return false;
+}
+
+void moveCharacter(Character& c, float dt) {
+    // Персонаж сталкивается со всем, кроме собственных коллайдеров
+    std::vector<int> world;
+    for (int i = 0; i < (int)collisionCache.size(); i++) {
+        if (!isInSubtree((int)collisionCache[i].extra.y, c.node)) world.push_back(i);
+    }
+    auto field = [&](vec3 p) { return mapList(p, world).x; };
+    float radius = std::max(c.radius, 0.05f);
+    float half = std::max(c.height * 0.5f - radius, 0.0f);   // От центра до центров крайних сфер капсулы
+
+    auto resolve = [&](float offsetY) {
+        bool ground = false;
+        for (int i = 0; i < 4; i++) {
+            vec3 center = c.position + vec3(0, offsetY, 0);
+            float d = field(center);
+            if (d >= radius) break;
+            vec3 n = gradientCentral(field, center);
+            c.position += n * (radius - d);
+            if (n.y > 0.5f) ground = true;
+            // Гасим скорость, направленную в поверхность
+            float vn = glm::dot(c.velocity, n);
+            if (vn < 0.0f) c.velocity -= n * vn;
+        }
+        return ground;
+    };
+
+    // Несколько подшагов, чтобы не пролетать сквозь тонкие стены
+    const int substeps = 3;
+    float h = dt / substeps;
+    for (int s = 0; s < substeps; s++) {
+        c.velocity += gravity * h;
+        c.position += c.velocity * h;
+        bool ground = resolve(-half);
+        if (half > 0.0f) resolve(half);
+        c.grounded = ground;
+    }
 }
 
 }

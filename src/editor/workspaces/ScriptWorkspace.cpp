@@ -75,7 +75,7 @@ namespace {
     void apiReference() {
         const nls::Registry& reg = nls::registry();
         ImGui::TextDisabled("LANGUAGE");
-        ImGui::TextWrapped("var x: float = 1.0   script variable\nlet y = 2            local\nfunc f(a: int) -> int { }\non start() / update(dt: float)\non fixedUpdate(dt: float)\non collide(other: node)\non triggerEnter(other: node) / triggerExit\nif / else, while, for i in 0..10\nTypes: float int bool vec3 string node\nself is the node the script is on;\nother == null means the player.");
+        ImGui::TextWrapped("var x: float = 1.0   script variable\nlet y = 2            local\nfunc f(a: int) -> int { }\non start() / update(dt: float)\non fixedUpdate(dt: float)\non collide(other: node)\non triggerEnter(other: node) / triggerExit\nif / else, while, for i in 0..10\nTypes: float int bool vec3 string node\nself is the node the script is on.");
         ImGui::Separator();
 
         if (ImGui::CollapsingHeader("Node properties", ImGuiTreeNodeFlags_DefaultOpen)) {

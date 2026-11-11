@@ -1,11 +1,14 @@
 #include "Game.h"
 #include "Scene.h"
 #include "Physics.h"
+#include "Audio.h"
 #include "ScriptSystem.h"
 #include "Settings.h"
 #include "Renderer.h"
+#include "MathUtils.h"
 #include "imgui.h"
 #include <algorithm>
+#include <filesystem>
 #include <map>
 
 PlayState play;
@@ -17,6 +20,11 @@ namespace {
     std::vector<vec3> basePositions;
     std::vector<float> phases;
     vec3 savedGravity;
+
+    // Состояние персонажей и звуков по индексу узла
+    struct ControllerState { vec3 velocity = {0, 0, 0}; bool grounded = false; float pitch = 0.0f; };
+    std::map<int, ControllerState> controllers;
+    std::map<int, int> nodeSounds;
 
     // --- Ввод для скриптов: клавиши по именам ---
     GLFWwindow* inputWindow = nullptr;
@@ -52,6 +60,29 @@ namespace {
         for (const auto& [name, code] : keyNames) keysNow[code] = rawKeyDown(code);
     }
 
+    // --- Звук ---
+    std::string resolveAsset(const std::string& path) {
+        std::filesystem::path p(path);
+        if (p.is_absolute() || nls::scripts.rootDir.empty()) return path;
+        return (std::filesystem::path(nls::scripts.rootDir) / p).string();
+    }
+
+    void playNodeSound(int node) {
+        if (node < 0 || node >= (int)sceneGraph.size()) return;
+        const SceneNode& n = sceneGraph[node];
+        if (n.audio.clip.empty()) return;
+        auto it = nodeSounds.find(node);
+        if (it != nodeSounds.end()) audio::stop(it->second);
+        nodeSounds[node] = audio::play(resolveAsset(n.audio.clip), n.audio.volume, n.audio.loop, n.audio.spatial, vec3(n.gpuData.position), n.audio.range);
+    }
+
+    void stopNodeSound(int node) {
+        auto it = nodeSounds.find(node);
+        if (it == nodeSounds.end()) return;
+        audio::stop(it->second);
+        nodeSounds.erase(it);
+    }
+
     void connectScriptHost(GLFWwindow* window) {
         inputWindow = window;
         buildKeyNames();
@@ -60,30 +91,9 @@ namespace {
         nls::host.delta = 0.0f;
         nls::host.keyDown = [](const std::string& key) { int code = keyCode(key); return code != 0 && keysNow[code]; };
         nls::host.keyPressed = [](const std::string& key) { int code = keyCode(key); return code != 0 && keysNow[code] && !keysBefore[code]; };
-        nls::host.playerPosition = []() { return play.pos + vec3(0, PLAYER_EYE_HEIGHT, 0); };
-        nls::host.setPlayerPosition = [](vec3 p) { play.pos = p - vec3(0, PLAYER_EYE_HEIGHT, 0); play.vel = vec3(0.0f); };
-    }
-
-    const float JUMP_SPEED = 6.5f;
-    const float WALK_SPEED = 4.0f;
-    const float RUN_SPEED = 7.5f;
-    const float KILL_HEIGHT = -50.0f;
-
-    // Выталкивает сферу из геометрии; возвращает true, если под ней опора
-    bool resolveSphere(vec3 offset) {
-        bool ground = false;
-        for (int i = 0; i < 4; i++) {
-            vec3 c = play.pos + offset;
-            float d = sceneDistance(c);
-            if (d >= PLAYER_RADIUS) break;
-            vec3 n = sceneNormal(c);
-            play.pos += n * (PLAYER_RADIUS - d);
-            if (n.y > 0.5f) ground = true;
-            // Гасим скорость, направленную в поверхность
-            float vn = glm::dot(play.vel, n);
-            if (vn < 0.0f) play.vel -= n * vn;
-        }
-        return ground;
+        nls::host.playSound = playNodeSound;
+        nls::host.stopSound = stopNodeSound;
+        nls::host.resolvePath = resolveAsset;
     }
 
     void applyTrigger(const SceneNode& trigger) {
@@ -115,28 +125,100 @@ namespace {
         }
     }
 
+    int findMainCamera() {
+        for (int i = 0; i < (int)sceneGraph.size(); i++) {
+            if (nodeType(sceneGraph[i]) == NODE_CAMERA && sceneGraph[i].worldActive) return i;
+        }
+        return -1;
+    }
+
+    // Камера смотрит вдоль своей локальной оси -Z
+    void refreshCamera() {
+        if (play.cameraNode < 0 || play.cameraNode >= (int)sceneGraph.size()) return;
+        mat4 m = calculateWorldMatrix(play.cameraNode);
+        vec3 scale;
+        mat3 r = extractRotation(m, scale);
+        cameraOverrideBasis = { vec3(m[3]), -r[2], r[0], r[1] };
+        cameraOverrideFov = sceneGraph[play.cameraNode].cameraFov;
+    }
+
+    // Персонажи: ввод -> желаемая скорость -> капсула в мире коллайдеров
+    void updateControllers(GLFWwindow* window, float dt, float mouseDX, float mouseDY, std::vector<physics::KinematicSphere>& spheres) {
+        for (int i = 0; i < (int)sceneGraph.size(); i++) {
+            SceneNode& node = sceneGraph[i];
+            const CharacterController& cc = node.controller;
+            if (!cc.enabled || !node.worldActive) continue;
+            ControllerState& state = controllers[i];
+
+            if (cc.mouseLook) {
+                node.localRotation.y -= mouseDX * 0.0025f;
+                state.pitch = std::clamp(state.pitch - mouseDY * 0.0025f, -1.5f, 1.5f);
+                // Наклон головы достаётся дочерним камерам, само тело остаётся вертикальным
+                for (int child : node.children) if (nodeType(sceneGraph[child]) == NODE_CAMERA) sceneGraph[child].localRotation.x = state.pitch;
+            }
+
+            float yaw = node.localRotation.y;
+            vec3 forward = { -std::sin(yaw), 0.0f, -std::cos(yaw) };
+            vec3 right = { std::cos(yaw), 0.0f, -std::sin(yaw) };
+            vec3 wish(0.0f);
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) wish += forward;
+            if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) wish -= forward;
+            if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) wish += right;
+            if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) wish -= right;
+            if (glm::dot(wish, wish) > 0.0f) wish = glm::normalize(wish);
+            float speed = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) ? cc.runSpeed : cc.walkSpeed;
+            state.velocity.x = wish.x * speed;
+            state.velocity.z = wish.z * speed;
+            if (state.grounded && glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) { state.velocity.y = cc.jumpSpeed; state.grounded = false; }
+
+            // Тела персонаж толкает желаемой скоростью — той, что была до упора в стены
+            vec3 pushVelocity = state.velocity;
+
+            physics::Character body;
+            body.node = i;
+            body.position = vec3(node.gpuData.position);
+            body.velocity = state.velocity;
+            body.radius = cc.radius;
+            body.height = cc.height;
+            body.grounded = state.grounded;
+            physics::moveCharacter(body, dt);
+            state.velocity = body.velocity;
+            state.grounded = body.grounded;
+
+            // Мировое положение обратно в локальное
+            if (node.parent == -1) node.localPosition = body.position;
+            else node.localPosition = vec3(glm::inverse(calculateWorldMatrix(node.parent)) * vec4(body.position, 1.0f));
+
+            float half = std::max(cc.height * 0.5f - cc.radius, 0.0f);
+            spheres.push_back({ body.position - vec3(0, half, 0), cc.radius, pushVelocity, i });
+            if (half > 0.0f) spheres.push_back({ body.position + vec3(0, half, 0), cc.radius, pushVelocity, i });
+        }
+    }
+
+    void updateAudio() {
+        if (!audio::available()) return;
+        CameraBasis b = getCameraBasis();
+        audio::setListener(b.pos, b.fwd, b.up);
+        for (auto it = nodeSounds.begin(); it != nodeSounds.end();) {
+            int node = it->first;
+            bool alive = node < (int)sceneGraph.size() && audio::isPlaying(it->second);
+            // Скрытый узел замолкает
+            if (alive && !sceneGraph[node].worldActive) { audio::stop(it->second); alive = false; }
+            if (!alive) { it = nodeSounds.erase(it); continue; }
+            if (sceneGraph[node].audio.spatial) audio::setPosition(it->second, vec3(sceneGraph[node].gpuData.position));
+            ++it;
+        }
+        audio::collectFinished();
+    }
 }
 
 bool isPlayMode() { return play.active; }
 
-CameraBasis getPlayCameraBasis() {
-    vec3 fwd = { std::cos(play.pitch) * std::sin(play.yaw), std::sin(play.pitch), -std::cos(play.pitch) * std::cos(play.yaw) };
-    vec3 right = glm::normalize(glm::cross(fwd, vec3(0, 1, 0)));
-    vec3 up = glm::normalize(glm::cross(right, fwd));
-    return { play.pos + vec3(0, PLAYER_EYE_HEIGHT, 0), fwd, right, up };
-}
-
 void startPlay(GLFWwindow* window) {
     if (play.active) return;
 
-    // Игрок появляется там, где стоит камера редактора, и смотрит туда же
-    CameraBasis b = getCameraBasis();
-    play.pos = b.pos - vec3(0, PLAYER_EYE_HEIGHT, 0);
-    play.spawn = play.pos;
-    play.vel = vec3(0);
-    play.pitch = std::asin(std::clamp(b.fwd.y, -1.0f, 1.0f));
-    play.yaw = std::atan2(b.fwd.x, -b.fwd.z);
-    play.grounded = false;
+    // Вид редактора запоминаем: им пользуемся, если в сцене нет камеры
+    CameraBasis editorView = getCameraBasis();
 
     savedScene = sceneGraph;
     savedSelection = selectedIndices;
@@ -144,19 +226,38 @@ void startPlay(GLFWwindow* window) {
     basePositions.clear();
     for (const auto& n : sceneGraph) basePositions.push_back(n.localPosition);
     phases.assign(sceneGraph.size(), 0.0f);
+    controllers.clear();
     physics::reset();
     savedGravity = physics::gravity;
     for (auto& n : sceneGraph) { n.body.sleeping = false; n.body.sleepTimer = 0.0f; }
-    connectScriptHost(window);
-    nls::scripts.start();
 
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-    if (glfwRawMouseMotionSupported()) glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+    updateSceneCaches();
+    play.cameraNode = findMainCamera();
+    cameraOverrideBasis = editorView;
+    cameraOverrideFov = 0.0f;
+    cameraOverride = true;
+    refreshCamera();
+    if (play.cameraNode < 0 && !play.standalone) showToast("No camera in the scene: Add > Camera");
+
+    // Курсор захватывается, только если кому-то нужен обзор мышью
+    bool wantsMouse = false;
+    for (const auto& n : sceneGraph) if (n.controller.enabled && n.controller.mouseLook && n.worldActive) wantsMouse = true;
+    play.cursorCaptured = wantsMouse && play.mouseLook;
+    if (play.cursorCaptured) {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        if (glfwRawMouseMotionSupported()) glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+    }
     glfwGetCursorPos(window, &play.lastMouseX, &play.lastMouseY);
     play.mouseSettle = 3;
+
+    audio::init();
+    connectScriptHost(window);
     play.active = true;
-    cameraOverrideBasis = getPlayCameraBasis();
-    cameraOverride = true;
+    nls::scripts.start();
+    for (int i = 0; i < (int)sceneGraph.size(); i++) {
+        const SceneNode& n = sceneGraph[i];
+        if (n.audio.enabled && n.audio.playOnStart && n.worldActive) playNodeSound(i);
+    }
     spdlog::info("Play Mode started");
 }
 
@@ -164,9 +265,13 @@ void stopPlay(GLFWwindow* window) {
     if (!play.active) return;
     play.active = false;
     cameraOverride = false;
+    cameraOverrideFov = 0.0f;
     nls::scripts.stop();
+    audio::stopAll();
+    nodeSounds.clear();
     physics::gravity = savedGravity;
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    play.cursorCaptured = false;
     if (play.standalone) { glfwSetWindowShouldClose(window, GLFW_TRUE); return; }
     sceneGraph = savedScene;
     selectedIndices = savedSelection;
@@ -178,14 +283,11 @@ void updatePlay(GLFWwindow* window, float deltaTime) {
     if (!play.active) return;
     float dt = std::min(deltaTime, 1.0f / 20.0f);
 
-    // Обзор мышью
     // При захвате курсора система может прислать скачок позиции — первые кадры его пропускаем
     double mx, my; glfwGetCursorPos(window, &mx, &my);
+    float mouseDX = 0.0f, mouseDY = 0.0f;
     if (play.mouseSettle > 0) play.mouseSettle--;
-    else if (play.mouseLook) {
-        play.yaw += (float)(mx - play.lastMouseX) * 0.0025f;
-        play.pitch = std::clamp(play.pitch - (float)(my - play.lastMouseY) * 0.0025f, -1.5f, 1.5f);
-    }
+    else if (play.cursorCaptured) { mouseDX = (float)(mx - play.lastMouseX); mouseDY = (float)(my - play.lastMouseY); }
     play.lastMouseX = mx; play.lastMouseY = my;
 
     // Скрипты и встроенные поведения
@@ -195,41 +297,9 @@ void updatePlay(GLFWwindow* window, float deltaTime) {
     nls::scripts.update(dt);
     updateBehaviors(dt);
 
-    // Движение в горизонтальной плоскости
-    vec3 forward = { std::sin(play.yaw), 0.0f, -std::cos(play.yaw) };
-    vec3 right = { std::cos(play.yaw), 0.0f, std::sin(play.yaw) };
-    vec3 wish(0.0f);
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) wish += forward;
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) wish -= forward;
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) wish += right;
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) wish -= right;
-    if (glm::dot(wish, wish) > 0.0f) wish = glm::normalize(wish);
-    float speed = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) ? RUN_SPEED : WALK_SPEED;
-    play.vel.x = wish.x * speed;
-    play.vel.z = wish.z * speed;
+    std::vector<physics::KinematicSphere> spheres;
+    updateControllers(window, dt, mouseDX, mouseDY, spheres);
 
-    if (play.grounded && glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) { play.vel.y = JUMP_SPEED; play.grounded = false; }
-
-    // Физике игрок виден как две сферы, движущиеся с желаемой скоростью (до упора в стены)
-    vec3 pushVelocity = play.vel;
-
-    // Несколько подшагов, чтобы не пролетать сквозь тонкие стены
-    const int substeps = 3;
-    float h = dt / substeps;
-    for (int s = 0; s < substeps; s++) {
-        play.vel += physics::gravity * h;
-        play.pos += play.vel * h;
-        bool ground = resolveSphere(vec3(0.0f));
-        resolveSphere(vec3(0, PLAYER_EYE_HEIGHT, 0));
-        play.grounded = ground;
-    }
-
-    if (play.pos.y < KILL_HEIGHT) { play.pos = play.spawn; play.vel = vec3(0); }
-
-    std::vector<physics::KinematicSphere> spheres = {
-        { play.pos, PLAYER_RADIUS, pushVelocity, physics::PLAYER_ID },
-        { play.pos + vec3(0, PLAYER_EYE_HEIGHT, 0), PLAYER_RADIUS, pushVelocity, physics::PLAYER_ID },
-    };
     physics::Events events;
     events.onCollide = [](int self, int other, vec3, vec3, float) { nls::scripts.onCollide(self, other); };
     events.onTrigger = [](int trigger, int other, bool entered) {
@@ -239,14 +309,18 @@ void updatePlay(GLFWwindow* window, float deltaTime) {
     };
     physics::step(dt, spheres, events, [](float h) { nls::scripts.fixedUpdate(h); });
 
-    cameraOverrideBasis = getPlayCameraBasis();
+    // Активная камера могла смениться (скрипт спрятал одну и показал другую)
+    if (play.cameraNode < 0 || play.cameraNode >= (int)sceneGraph.size() || !sceneGraph[play.cameraNode].active) play.cameraNode = findMainCamera();
+    refreshCamera();
+    updateAudio();
 }
 
 void drawToast() {
     if (!toast.active) return;
     ImGuiIO& io = ImGui::GetIO();
     float width = std::max(200.0f, ImGui::CalcTextSize(toast.message.c_str()).x + 40.0f);
-    ImGui::SetNextWindowPos(ImVec2(viewportRect.x + (viewportRect.z - width) * 0.5f, viewportRect.y + viewportRect.w - 60));
+    vec4 area = viewportRect.z > 1.0f ? viewportRect : vec4(0, 0, io.DisplaySize.x, io.DisplaySize.y);
+    ImGui::SetNextWindowPos(ImVec2(area.x + (area.z - width) * 0.5f, area.y + area.w - 60));
     ImGui::SetNextWindowSize(ImVec2(width, 40));
     ImGui::Begin("Toast", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing);
     ImGui::SetCursorPosX((ImGui::GetWindowSize().x - ImGui::CalcTextSize(toast.message.c_str()).x) * 0.5f);
@@ -260,13 +334,14 @@ void drawPlayHud() {
     ImGuiIO& io = ImGui::GetIO();
     viewportRect = vec4(0, 0, io.DisplaySize.x, io.DisplaySize.y);
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    ImVec2 c(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-    dl->AddCircleFilled(c, 2.5f, IM_COL32(255, 255, 255, 200));
-    if (!play.standalone) dl->AddText(ImVec2(10, 8), IM_COL32(255, 255, 255, 180), "PLAY MODE  |  WASD move, Space jump, Shift run  |  Esc or F5 to stop");
-    if (editorCfg.showStats && !play.standalone) {
-        char buf[128];
-        snprintf(buf, sizeof(buf), "%.0f FPS | SDF %dx%d | GPU %.2f ms", io.Framerate, renderStats.renderW, renderStats.renderH, renderStats.gpuMs);
-        dl->AddText(ImVec2(10, 26), IM_COL32(255, 255, 255, 180), buf);
+    if (play.cursorCaptured) dl->AddCircleFilled(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), 2.5f, IM_COL32(255, 255, 255, 200));
+    if (!play.standalone) {
+        dl->AddText(ImVec2(10, 8), IM_COL32(255, 255, 255, 180), "PLAY MODE  |  Esc or F5 to stop");
+        if (editorCfg.showStats) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "%.0f FPS | SDF %dx%d | GPU %.2f ms", io.Framerate, renderStats.renderW, renderStats.renderH, renderStats.gpuMs);
+            dl->AddText(ImVec2(10, 26), IM_COL32(255, 255, 255, 180), buf);
+        }
     }
     drawToast();
 }
