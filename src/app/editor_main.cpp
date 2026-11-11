@@ -36,6 +36,7 @@
 #include "Project.h"
 #include "Demo.h"
 #include "Conversion.h"
+#include "Panels.h"
 #include "ScriptSystem.h"
 #include "imgui.h"
 
@@ -49,6 +50,7 @@ struct LaunchOptions {
     std::string exportDir;     // --export: собрать игру в папку и выйти
     bool demo = false;         // --demo: открыть демо-сцену
     int select = -1;           // --select N: выделить узел (дымовой тест инспектора)
+    std::string openScript;    // --open-script: открыть скрипт проекта в Script Editor
     std::string convert;       // --convert mesh|volume: конвертировать выделенное при старте
     int convertResolution = 64;
     int workspace = -1;        // --workspace 0..4: стартовая вкладка
@@ -103,6 +105,7 @@ public:
         if (options.benchObjects > 0) addBenchmarkObjects(options.benchObjects);
 
         // Тестовые хуки: после того как сцена загружена
+        if (!options.openScript.empty()) openScriptInEditor(options.openScript);
         if (options.select >= 0 && options.select < (int)sceneGraph.size()) selectedIndices = { options.select };
         if (!options.convert.empty()) {
             updateSceneCaches();
@@ -363,6 +366,7 @@ static void printUsage() {
         "  --export <dir>         export the game to a folder and exit\n"
         "  --workspace <0..3>     start in the Model, Scene, UV or Script editor\n"
         "  --hold <seconds>       run for a while and exit (UI smoke test)\n"
+        "  --open-script <scripts/x.nls|.nlsg>  open a script in the Script Editor\n"
         "  --select <n> --convert mesh|volume [--convert-resolution r]\n"
         "                         convert node n at startup (test hook)\n"
         "  --bench <frames>       measure average frame time and exit\n"
@@ -386,6 +390,7 @@ int main(int argc, char** argv) {
             else if (a == "--demo") opts.demo = true;
             else if (a == "--workspace") opts.workspace = std::stoi(next());
             else if (a == "--select") opts.select = std::stoi(next());
+            else if (a == "--open-script") opts.openScript = next();
             else if (a == "--convert") { opts.convert = next(); if (opts.convert != "mesh" && opts.convert != "volume") throw std::runtime_error("--convert takes mesh or volume"); }
             else if (a == "--convert-resolution") opts.convertResolution = std::stoi(next());
             else if (a == "--hold") opts.hold = std::stof(next());

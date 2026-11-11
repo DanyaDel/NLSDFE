@@ -46,6 +46,16 @@ if(NOT miniaudio_POPULATED)
   FetchContent_Populate(miniaudio)
 endif()
 
+# --- imnodes: холст с узлами для визуальных скриптов (поверх ImGui) ---
+FetchContent_Declare(
+  imnodes
+  URL https://github.com/Nelarius/imnodes/archive/refs/tags/v0.5.zip
+)
+FetchContent_GetProperties(imnodes)
+if(NOT imnodes_POPULATED)
+  FetchContent_Populate(imnodes)
+endif()
+
 # --- spdlog ---
 FetchContent_Declare(
   spdlog
@@ -96,6 +106,12 @@ else()
 endif()
 target_link_libraries(imgui PUBLIC ${NLS_VULKAN_LIBS} glfw)
 
+add_library(imnodes STATIC ${imnodes_SOURCE_DIR}/imnodes.cpp)
+target_include_directories(imnodes PUBLIC ${imnodes_SOURCE_DIR})
+# imnodes 0.5 написан до того, как ImGui стал требовать этот макрос явно
+target_compile_definitions(imnodes PRIVATE IMGUI_DEFINE_MATH_OPERATORS)
+target_link_libraries(imnodes PUBLIC imgui)
+
 # =====================================================================
 # Модули движка. Зависимости идут строго в одну сторону:
 #   core <- scene, audio <- physics <- script <- render <- runtime <- (editor | player)
@@ -132,6 +148,7 @@ add_library(nls_script STATIC
     src/script/VM.cpp
     src/script/Bindings.cpp
     src/script/ScriptSystem.cpp
+    src/script/VisualScript.cpp
 )
 target_include_directories(nls_script PUBLIC src/script)
 target_link_libraries(nls_script PUBLIC nls_scene nls_physics nls_audio)
@@ -159,19 +176,20 @@ add_executable(SDF_Engine
     src/editor/workspaces/SceneWorkspace.cpp
     src/editor/workspaces/UvWorkspace.cpp
     src/editor/workspaces/ScriptWorkspace.cpp
+    src/editor/workspaces/GraphEditor.cpp
     src/editor/EngineBridge.cpp
     src/editor/Input.cpp
     src/editor/FileDialogs.cpp
 )
-target_include_directories(SDF_Engine PRIVATE src/editor)
-target_link_libraries(SDF_Engine PRIVATE nls_runtime)
+target_include_directories(SDF_Engine PRIVATE src/editor src/editor/workspaces)
+target_link_libraries(SDF_Engine PRIVATE nls_runtime imnodes)
 
 # Плеер: движок без редактора
 add_executable(NLSDFE_Player src/app/player_main.cpp)
 target_link_libraries(NLSDFE_Player PRIVATE nls_runtime)
 
 # Тесты без окна и GPU
-add_executable(nls_tests tests/tests_main.cpp tests/test_scene.cpp tests/test_physics.cpp tests/test_script.cpp tests/test_convert.cpp)
+add_executable(nls_tests tests/tests_main.cpp tests/test_scene.cpp tests/test_physics.cpp tests/test_script.cpp tests/test_convert.cpp tests/test_visual.cpp)
 target_link_libraries(nls_tests PRIVATE nls_scene nls_physics nls_script)
 enable_testing()
 add_test(NAME nls_tests COMMAND nls_tests)

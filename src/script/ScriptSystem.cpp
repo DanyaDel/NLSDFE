@@ -1,5 +1,6 @@
 #include "ScriptSystem.h"
 #include "Scene.h"
+#include "VisualScript.h"
 #include <fstream>
 #include <sstream>
 
@@ -47,15 +48,24 @@ std::shared_ptr<const Program> ScriptSystem::load(const std::string& path, std::
         return it->second.program;
     }
 
-    std::ifstream file(full);
-    std::stringstream source;
-    source << file.rdbuf();
-
     Cached entry;
     entry.time = time;
     entry.fromSource = true;
     auto program = std::make_shared<Program>();
-    if (compile(source.str(), *program, entry.errors)) entry.program = program;
+    bool ok = false;
+    if (fs::path(full).extension() == ".nlsg") {
+        // Визуальный скрипт: граф -> код NLS -> байткод
+        visual::Graph graph;
+        std::string error;
+        if (visual::loadGraph(full, graph, &error)) ok = visual::compileGraph(graph, *program, entry.errors);
+        else entry.errors.push_back({0, 0, error});
+    } else {
+        std::ifstream file(full);
+        std::stringstream source;
+        source << file.rdbuf();
+        ok = compile(source.str(), *program, entry.errors);
+    }
+    if (ok) entry.program = program;
     if (errors) *errors = entry.errors;
     cache[full] = entry;
     return entry.program;

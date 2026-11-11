@@ -627,6 +627,7 @@ static void renderComponents(SceneNode& node, int nodeIdx) {
         if (ImGui::MenuItem("Behavior", nullptr, false, node.behavior == BEHAVIOR_NONE)) { saveUndo(); node.behavior = BEHAVIOR_ROTATE; }
         if (ImGui::BeginMenu("Script", node.script.path.empty())) {
             std::vector<std::string> files = project.list("scripts", ".nls");
+            for (const std::string& f : project.list("scripts", ".nlsg")) files.push_back(f);   // Визуальные скрипты
             if (files.empty()) ImGui::TextDisabled("No scripts yet: create one in the Script editor");
             for (const std::string& file : files) {
                 if (ImGui::MenuItem(file.c_str())) { saveUndo(); node.script.path = "scripts/" + file; node.script.vars.clear(); }

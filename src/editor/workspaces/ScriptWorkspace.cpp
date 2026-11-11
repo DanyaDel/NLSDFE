@@ -3,11 +3,13 @@
 #include "Panels.h"
 #include "Project.h"
 #include "ScriptSystem.h"
+#include "GraphEditor.h"
 #include "imgui.h"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <map>
+#include <algorithm>
 
 namespace fs = std::filesystem;
 
@@ -36,23 +38,41 @@ namespace {
         compiled = nls::compile(buffer, program, errors);
     }
 
+    bool isVisual(const std::string& rel) { return fs::path(rel).extension() == ".nlsg"; }
+
     void load(const std::string& rel) {
+        openPath = rel;
+        modified = false;
+        if (isVisual(rel)) { grapheditor::open(project.path(rel)); return; }
         std::ifstream f(project.path(rel));
         std::stringstream ss;
         ss << f.rdbuf();
         buffer = ss.str();
-        openPath = rel;
-        modified = false;
         check();
     }
 
     void save() {
         if (openPath.empty()) return;
-        std::ofstream f(project.path(openPath));
-        f << buffer;
-        modified = false;
-        check();
-        showToast(compiled ? "Saved: " + fs::path(openPath).filename().string() : "Saved with errors");
+        bool good;
+        if (isVisual(openPath)) {
+            if (!grapheditor::save()) return;
+            good = grapheditor::compiledOk();
+        } else {
+            std::ofstream f(project.path(openPath));
+            f << buffer;
+            modified = false;
+            check();
+            good = compiled;
+        }
+        showToast(good ? "Saved: " + fs::path(openPath).filename().string() : "Saved with errors");
+    }
+
+    std::string newScriptPath(const char* base, const char* ext) {
+        std::error_code ec;
+        for (int i = 0; ; i++) {
+            std::string rel = std::string("scripts/") + base + (i ? "_" + std::to_string(i) : std::string()) + ext;
+            if (!fs::exists(project.path(rel), ec)) return rel;
+        }
     }
 
     int resizeCallback(ImGuiInputTextCallbackData* data) {
@@ -120,38 +140,47 @@ void drawScriptWorkspace(GLFWwindow* window, const WorkArea& area) {
     ImGui::Begin("ScriptList", nullptr, flags);
     ImGui::TextDisabled("SCRIPTS");
     if (ImGui::Button("New script", ImVec2(-1, 0))) {
-        std::string rel;
-        std::error_code ec;
-        for (int i = 0; i < 1000; i++) {
-            rel = "scripts/script" + (i ? "_" + std::to_string(i) : std::string()) + ".nls";
-            if (!fs::exists(project.path(rel), ec)) break;
-        }
+        std::string rel = newScriptPath("script", ".nls");
         std::ofstream(project.path(rel)) << TEMPLATE;
         load(rel);
     }
+    if (ImGui::Button("New visual script", ImVec2(-1, 0))) {
+        std::string rel = newScriptPath("graph", ".nlsg");
+        if (grapheditor::createDefault(project.path(rel))) load(rel);
+    }
     ImGui::Separator();
-    for (const std::string& file : project.list("scripts", ".nls")) {
+    std::vector<std::string> files = project.list("scripts", ".nls");
+    for (const std::string& f : project.list("scripts", ".nlsg")) files.push_back(f);
+    std::sort(files.begin(), files.end());
+    for (const std::string& file : files) {
         std::string rel = "scripts/" + file;
-        if (ImGui::Selectable(file.c_str(), rel == openPath) && rel != openPath) load(rel);
+        std::string label = (isVisual(rel) ? "[graph] " : "") + file;
+        if (ImGui::Selectable(label.c_str(), rel == openPath) && rel != openPath) load(rel);
     }
     ImGui::End();
 
     // --- Редактор ---
     ImGui::SetNextWindowPos(ImVec2(area.x + listWidth, area.y)); ImGui::SetNextWindowSize(ImVec2(editorWidth, area.h - outputHeight));
     ImGui::Begin("ScriptEditor", nullptr, flags);
+    bool visual = !openPath.empty() && isVisual(openPath);
+    bool dirty = visual ? grapheditor::modified() : modified;
+    bool good = visual ? grapheditor::compiledOk() : compiled;
+    const std::vector<nls::CompileError>& problems = visual ? grapheditor::problems() : errors;
     if (openPath.empty()) {
         ImGui::TextDisabled("Pick a script on the left or create a new one.");
     } else {
-        ImGui::Text("%s%s", openPath.c_str(), modified ? " *" : "");
+        ImGui::Text("%s%s", openPath.c_str(), dirty ? " *" : "");
         ImGui::SameLine();
         if (ImGui::SmallButton("Save (Ctrl+S)")) save();
         ImGui::SameLine();
-        if (compiled) ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "OK");
-        else ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%d error(s)", (int)errors.size());
+        if (good) ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "OK");
+        else ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%d error(s)", (int)problems.size());
 
         if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) save();
-        if (ImGui::InputTextMultiline("##source", buffer.data(), buffer.capacity() + 1, ImVec2(-1, -1),
-                                      ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackResize, resizeCallback, &buffer)) {
+        if (visual) {
+            grapheditor::drawCanvas();
+        } else if (ImGui::InputTextMultiline("##source", buffer.data(), buffer.capacity() + 1, ImVec2(-1, -1),
+                                             ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackResize, resizeCallback, &buffer)) {
             modified = true;
         }
     }
@@ -163,8 +192,17 @@ void drawScriptWorkspace(GLFWwindow* window, const WorkArea& area) {
     if (ImGui::BeginTabBar("OutputTabs")) {
         if (ImGui::BeginTabItem("Problems")) {
             if (openPath.empty()) ImGui::TextDisabled("No script open");
-            else if (errors.empty()) ImGui::TextDisabled(modified ? "Save to check the script" : "No problems");
-            for (const auto& e : errors) ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%d:%d  %s", e.line, e.column, e.message.c_str());
+            else if (problems.empty()) ImGui::TextDisabled(!visual && modified ? "Save to check the script" : "No problems");
+            for (const auto& e : problems) {
+                if (visual) ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", e.message.c_str());
+                else ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%d:%d  %s", e.line, e.column, e.message.c_str());
+            }
+            ImGui::EndTabItem();
+        }
+        if (visual && ImGui::BeginTabItem("Generated NLS")) {
+            // Граф — это обычный код на NLS; видно, во что превращается каждый узел
+            const std::string& code = grapheditor::generatedSource();
+            ImGui::InputTextMultiline("##generated", const_cast<char*>(code.c_str()), code.size() + 1, ImVec2(-1, -1), ImGuiInputTextFlags_ReadOnly);
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Console")) {
@@ -184,6 +222,7 @@ void drawScriptWorkspace(GLFWwindow* window, const WorkArea& area) {
     // --- Справочник ---
     ImGui::SetNextWindowPos(ImVec2(area.x + area.w - apiWidth, area.y)); ImGui::SetNextWindowSize(ImVec2(apiWidth, area.h));
     ImGui::Begin("ScriptApi", nullptr, flags);
-    apiReference();
+    if (visual) grapheditor::drawSidebar();
+    else apiReference();
     ImGui::End();
 }
