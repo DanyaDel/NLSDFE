@@ -141,7 +141,27 @@ namespace {
         auto& s = b.samples;
         s.clear();
 
-        if (type == SDF_SPHERE && uniform) {
+        if (type == SDF_VOLUME) {
+            // Узлы сетки у самой поверхности, сдвинутые на неё по градиенту; не больше ~200 точек
+            int res = (int)o.scale.w, offset = (int)o.extra.w;
+            float cellLocal = 2.0f / (float)std::max(res - 1, 1);
+            std::vector<vec3> surface;
+            for (int z = 0; z < res; z++) for (int y = 0; y < res; y++) for (int x = 0; x < res; x++) {
+                vec3 v = vec3(x, y, z) * cellLocal - vec3(1.0f);
+                float d = sampleVolume(offset, res, v);
+                if (std::abs(d) > cellLocal * 0.6f) continue;
+                const float e = cellLocal * 0.5f;
+                vec3 g(sampleVolume(offset, res, v + vec3(e, 0, 0)) - sampleVolume(offset, res, v - vec3(e, 0, 0)),
+                       sampleVolume(offset, res, v + vec3(0, e, 0)) - sampleVolume(offset, res, v - vec3(0, e, 0)),
+                       sampleVolume(offset, res, v + vec3(0, 0, e)) - sampleVolume(offset, res, v - vec3(0, 0, e)));
+                float len = glm::length(g);
+                if (len > 1e-8f) v -= g / len * d;
+                surface.push_back(v);
+            }
+            size_t stride = std::max<size_t>(1, surface.size() / 200);
+            for (size_t i = 0; i < surface.size(); i += stride) s.push_back(vec4(surface[i] * size * scl, 0.0f));
+            if (s.empty()) s.push_back(vec4(0.0f));
+        } else if (type == SDF_SPHERE && uniform) {
             // Шар — одна точка с радиусом: катится гладко и считается точно
             s.push_back(vec4(0, 0, 0, size * scl.x));
         } else if (type == SDF_CAPSULE && uniformXZ) {

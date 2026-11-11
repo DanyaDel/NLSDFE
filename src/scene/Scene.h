@@ -40,6 +40,8 @@ const char* shapeName(int type);
 float shapeParam2(int type, float raw);                 // Доп. параметр формы с дефолтом
 vec3 shapeHalfExtents(int type, float size, float p2);  // Локальные полуразмеры до масштаба
 float sdfObject(const GpuObject& o, vec3 p);
+float sampleVolume(int offset, int resolution, vec3 local);   // local — в кубе [-1, 1]^3 (снаружи — до куба плюс значение на границе)
+vec2 mapObjectList(const std::vector<GpuObject>& objects, vec3 p);   // CSG по списку; первый объект — всегда основа
 vec2 sceneMap(vec3 p);                                  // x = расстояние, y = индекс в gpuObjectCache
 float sceneDistance(vec3 p);
 vec3 sceneNormal(vec3 p);

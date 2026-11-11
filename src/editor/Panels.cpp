@@ -5,6 +5,7 @@
 #include "Game.h"
 #include "Renderer.h"
 #include "Project.h"
+#include "Conversion.h"
 #include "ScriptSystem.h"
 #include "EngineBridge.h"
 #include "FileDialogs.h"
@@ -41,7 +42,7 @@ void TextCentered(std::string text) {
 
 
 void addMenuItems(GLFWwindow* window) {
-    for (int t = 0; t < SDF_TYPE_COUNT; t++) {
+    for (int t = 0; t < SDF_PRIMITIVE_COUNT; t++) {
         if (ImGui::MenuItem(shapeName(t))) createNode(t, shapeName(t));
     }
     ImGui::Separator();
@@ -354,8 +355,12 @@ static void renderInspector(bool gameplay) {
 
     if (isSdf) {
         if (ImGui::CollapsingHeader("Geometry", ImGuiTreeNodeFlags_DefaultOpen)) {
-            if (ImGui::BeginCombo("Shape", shapeName(type))) {
-                for (int t = 0; t < SDF_TYPE_COUNT; t++) {
+            if (type == SDF_VOLUME) {
+                int res = node.volume ? node.volume->resolution : 0;
+                ImGui::Text("Voxel volume %d^3 (%d KB)", res, res * res * res * 4 / 1024);
+                ImGui::TextDisabled("Made from a mesh. Object > Convert to Mesh turns it back.");
+            } else if (ImGui::BeginCombo("Shape", shapeName(type))) {
+                for (int t = 0; t < SDF_PRIMITIVE_COUNT; t++) {
                     if (ImGui::Selectable(shapeName(t), t == type)) { saveUndo(); node.gpuData.position.w = (float)t; node.gpuData.rotationEuler.w = 0.0f; }
                 }
                 ImGui::EndCombo();
@@ -363,7 +368,7 @@ static void renderInspector(bool gameplay) {
             const char* ops[] = { "Union", "Subtract", "Intersect" };
             int op = std::clamp((int)std::lround(node.gpuData.params.y), 0, 2);
             if (ImGui::Combo("Operation", &op, ops, 3)) { saveUndo(); node.gpuData.params.y = (float)op; }
-            ImGui::DragFloat("Radius/Size", &node.gpuData.params.x, 0.05f, 0.01f, 100.0f); undoOnEdit();
+            if (type != SDF_VOLUME) { ImGui::DragFloat("Radius/Size", &node.gpuData.params.x, 0.05f, 0.01f, 100.0f); undoOnEdit(); }
             if (type == SDF_TORUS || type == SDF_CAPSULE || type == SDF_CONE) {
                 const char* label = (type == SDF_TORUS) ? "Thickness" : (type == SDF_CAPSULE) ? "Radius ratio" : "Top radius";
                 float p2 = shapeParam2(type, node.gpuData.rotationEuler.w);
@@ -726,6 +731,8 @@ void drawEditingLayout(GLFWwindow* window, const WorkArea& area, bool gameplay) 
     if (ImGui::BeginPopup("SceneContextMenu")) {
         if (ImGui::MenuItem("Duplicate")) { duplicateSelectedObject(); }
         if (ImGui::MenuItem("Delete")) { deleteSelectedObject(); }
+        if (ImGui::MenuItem("Convert to Mesh...", nullptr, false, canConvert(CONVERT_TO_MESH))) requestConversion(CONVERT_TO_MESH);
+        if (ImGui::MenuItem("Convert to SDF Volume...", nullptr, false, canConvert(CONVERT_TO_VOLUME))) requestConversion(CONVERT_TO_VOLUME);
         if (ImGui::BeginMenu("Add")) { addMenuItems(window); ImGui::EndMenu(); }
         ImGui::EndPopup();
     }

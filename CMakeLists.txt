@@ -108,7 +108,7 @@ target_include_directories(nls_core PUBLIC src/core ${vma_SOURCE_DIR}/include $<
 target_link_libraries(nls_core PUBLIC glm::glm spdlog::spdlog ${NLS_VULKAN_HEADERS})
 
 # scene: граф сцены, SDF на CPU, файлы .nos, камера
-add_library(nls_scene STATIC src/scene/Scene.cpp src/scene/Globals.cpp src/scene/Camera.cpp src/scene/UvTools.cpp)
+add_library(nls_scene STATIC src/scene/Scene.cpp src/scene/Globals.cpp src/scene/Camera.cpp src/scene/UvTools.cpp src/scene/MeshConvert.cpp)
 target_include_directories(nls_scene PUBLIC src/scene)
 target_link_libraries(nls_scene PUBLIC nls_core)
 
@@ -154,6 +154,7 @@ add_executable(SDF_Engine
     src/editor/Project.cpp
     src/editor/Demo.cpp
     src/editor/ExportWindow.cpp
+    src/editor/Conversion.cpp
     src/editor/workspaces/ModelWorkspace.cpp
     src/editor/workspaces/SceneWorkspace.cpp
     src/editor/workspaces/UvWorkspace.cpp
@@ -170,7 +171,7 @@ add_executable(NLSDFE_Player src/app/player_main.cpp)
 target_link_libraries(NLSDFE_Player PRIVATE nls_runtime)
 
 # Тесты без окна и GPU
-add_executable(nls_tests tests/tests_main.cpp tests/test_scene.cpp tests/test_physics.cpp tests/test_script.cpp)
+add_executable(nls_tests tests/tests_main.cpp tests/test_scene.cpp tests/test_physics.cpp tests/test_script.cpp tests/test_convert.cpp)
 target_link_libraries(nls_tests PRIVATE nls_scene nls_physics nls_script)
 enable_testing()
 add_test(NAME nls_tests COMMAND nls_tests)

@@ -18,6 +18,7 @@ OBJModel parseOBJ(const std::string& path) {
     std::vector<vec3> positions;
     std::vector<vec3> normals;
     std::vector<vec2> uvs;
+    std::vector<vec3> colors;
     bool missingNormals = false;
 
     std::string line;
@@ -29,6 +30,12 @@ OBJModel parseOBJ(const std::string& path) {
         if (prefix == "v") {
             vec3 v; ss >> v.x >> v.y >> v.z;
             positions.push_back(v);
+            // Необязательный цвет вершины: "v x y z r g b" (так пишут Blender и сам движок)
+            vec3 col(1.0f);
+            if (ss >> col.r >> col.g >> col.b) {
+                colors.resize(positions.size(), vec3(1.0f));
+                colors.back() = col;
+            }
         } else if (prefix == "vn") {
             vec3 n; ss >> n.x >> n.y >> n.z;
             normals.push_back(n);
@@ -58,7 +65,7 @@ OBJModel parseOBJ(const std::string& path) {
                 if (vIdx >= 0 && vIdx < (int)positions.size()) v.pos = positions[vIdx];
                 if (nIdx >= 0 && nIdx < (int)normals.size()) v.normal = normals[nIdx]; else missingNormals = true;
                 if (tIdx >= 0 && tIdx < (int)uvs.size()) v.uv = uvs[tIdx];
-                v.color = vec4(1, 1, 1, 1);
+                v.color = (vIdx >= 0 && vIdx < (int)colors.size()) ? vec4(colors[vIdx], 1.0f) : vec4(1, 1, 1, 1);
                 face.push_back(v);
             }
             // Триангуляция веером: квадраты и n-угольники тоже грузятся
@@ -326,6 +333,7 @@ const char* shapeName(int type) {
         case SDF_TORUS: return "Torus";
         case SDF_CAPSULE: return "Capsule";
         case SDF_CONE: return "Cone";
+        case SDF_VOLUME: return "Volume";
         case NODE_LIGHT: return "Light";
         case NODE_CAMERA: return "Camera";
         default: return "Empty";
@@ -366,6 +374,20 @@ static float sdCone(vec3 p, float h, float r1, float r2) {
     return s * std::sqrt(std::min(glm::dot(ca, ca), glm::dot(cb, cb)));
 }
 
+float sampleVolume(int offset, int res, vec3 v) {
+    if (res < 2 || offset < 0 || offset + res * res * res > (int)volumeData.size()) return glm::length(v) - 1.0f;
+    vec3 c = glm::clamp(v, vec3(-1.0f), vec3(1.0f));
+    float outside = glm::length(v - c);
+    vec3 g = (c * 0.5f + 0.5f) * (float)(res - 1);
+    glm::ivec3 i0 = glm::min(glm::ivec3(glm::floor(g)), glm::ivec3(res - 2));
+    vec3 f = g - vec3(i0);
+    const float* d = volumeData.data() + offset;
+    auto at = [&](int x, int y, int z) { return d[(i0.x + x) + res * ((i0.y + y) + res * (i0.z + z))]; };
+    float x00 = glm::mix(at(0, 0, 0), at(1, 0, 0), f.x), x10 = glm::mix(at(0, 1, 0), at(1, 1, 0), f.x);
+    float x01 = glm::mix(at(0, 0, 1), at(1, 0, 1), f.x), x11 = glm::mix(at(0, 1, 1), at(1, 1, 1), f.x);
+    return outside + glm::mix(glm::mix(x00, x10, f.y), glm::mix(x01, x11, f.y), f.z);
+}
+
 float sdfObject(const GpuObject& o, vec3 p) {
     vec3 q = mat3(vec3(o.rot0), vec3(o.rot1), vec3(o.rot2)) * (p - vec3(o.pos));
     vec3 scl = vec3(o.scale);
@@ -381,6 +403,7 @@ float sdfObject(const GpuObject& o, vec3 p) {
     else if (type == SDF_TORUS) d = glm::length(vec2(glm::length(vec2(u.x, u.z)) - size, u.y)) - size * p2;
     else if (type == SDF_CAPSULE) { u.y -= std::clamp(u.y, -size, size); d = glm::length(u) - size * p2; }
     else if (type == SDF_CONE) d = sdCone(u, size, size, size * p2);
+    else if (type == SDF_VOLUME) d = sampleVolume((int)o.extra.w, (int)o.scale.w, u / size) * size;
     else d = glm::length(u) - size;
     return d * minScale;
 }
@@ -396,6 +419,20 @@ static vec2 opSmoothSub(vec2 d1, vec2 d2, float k) {
 static vec2 opSmoothIntersect(vec2 d1, vec2 d2, float k) {
     float h = std::clamp(0.5f - 0.5f * (d2.x - d1.x) / k, 0.0f, 1.0f);
     return vec2(glm::mix(d2.x, d1.x, h) + k * h * (1.0f - h), (d1.x > d2.x) ? d1.y : d2.y);
+}
+
+vec2 mapObjectList(const std::vector<GpuObject>& objects, vec3 p) {
+    vec2 res(100.0f, -1.0f);
+    for (int i = 0; i < (int)objects.size(); i++) {
+        const GpuObject& o = objects[i];
+        vec2 cur(sdfObject(o, p), (float)i);
+        int op = (i == 0) ? OP_UNION : (int)o.rot1.w;
+        float k = o.rot2.w;
+        if (op == OP_UNION) res = opSmoothUnion(res, cur, k);
+        else if (op == OP_SUBTRACT) res = opSmoothSub(cur, res, k);
+        else res = opSmoothIntersect(res, cur, k);
+    }
+    return res;
 }
 
 vec2 sceneMap(vec3 p) {
@@ -470,10 +507,36 @@ static GpuObject makeColliderObject(int nodeIdx) {
     return o;
 }
 
+// Собирает сетки активных узлов в volumeData; пересобирает, только если набор сеток изменился
+static std::vector<int> layoutVolumes() {
+    static std::vector<const SdfVolume*> order;
+    std::vector<const SdfVolume*> current;
+    std::vector<int> offsets(sceneGraph.size(), -1);
+    for (const SceneNode& n : sceneGraph) {
+        if (nodeType(n) != SDF_VOLUME || !n.volume || !n.worldActive) continue;
+        if (std::find(current.begin(), current.end(), n.volume.get()) == current.end()) current.push_back(n.volume.get());
+    }
+    if (current != order) {
+        order = current;
+        volumeData.clear();
+        for (const SdfVolume* v : order) volumeData.insert(volumeData.end(), v->distances.begin(), v->distances.end());
+        volumeDataVersion++;
+    }
+    for (int i = 0; i < (int)sceneGraph.size(); i++) {
+        const SceneNode& n = sceneGraph[i];
+        if (nodeType(n) != SDF_VOLUME || !n.volume || !n.worldActive) continue;
+        int offset = 0;
+        for (const SdfVolume* v : order) { if (v == n.volume.get()) break; offset += (int)v->distances.size(); }
+        offsets[i] = offset;
+    }
+    return offsets;
+}
+
 void updateSceneCaches() {
     for (int i = 0; i < (int)sceneGraph.size(); i++) {
         if (sceneGraph[i].parent == -1) updateHierarchy(i, mat4(1.0f));
     }
+    std::vector<int> volumeOffsets = layoutVolumes();
 
     gpuObjectCache.clear();
     gpuLightCache.clear();
@@ -498,6 +561,7 @@ void updateSceneCaches() {
 
         if (!isSdfNode(node) || node.isTrigger) continue;
         if (gpuObjectCache.size() >= MAX_OBJECTS) continue;
+        if (type == SDF_VOLUME && volumeOffsets[i] < 0) continue;   // Сетки нет — рисовать нечего
 
         const ObjectData& d = node.gpuData;
         vec3 scl = glm::max(glm::abs(vec3(d.scale)), vec3(1e-4f));
@@ -518,6 +582,7 @@ void updateSceneCaches() {
         vec3 bound = (op == OP_INTERSECT) ? vec3(1e9f) : shapeHalfExtents(type, size, p2) * scl + vec3(k + 0.25f);
         o.bound = vec4(bound, d.params.w);
         o.extra = vec4(selected ? 1.0f : 0.0f, (float)i, gpuObjectCache.empty() ? 1.0f : 0.0f, 0.0f);
+        if (type == SDF_VOLUME) { o.scale.w = (float)node.volume->resolution; o.extra.w = (float)volumeOffsets[i]; }
         gpuObjectCache.push_back(o);
 
         // Коллайдер «по форме»: то же тело, что на экране, вместе с его CSG-операцией
@@ -616,7 +681,7 @@ std::function<int(const std::string&)> g_meshLoader;
 
 namespace {
     const uint32_t NOS_VERSION = 200;
-    const uint32_t NOSX_VERSION = 3;   // 2: твёрдые тела и скрипты; 3: коллайдер, звук, контроллер, камера
+    const uint32_t NOSX_VERSION = 4;   // 2: твёрдые тела и скрипты; 3: коллайдер, звук, контроллер, камера; 4: воксельные сетки
 
     template <typename T> void writePod(std::ostream& f, const T& v) { f.write(reinterpret_cast<const char*>(&v), sizeof(T)); }
     template <typename T> bool readPod(std::istream& f, T& v) { f.read(reinterpret_cast<char*>(&v), sizeof(T)); return (bool)f; }
@@ -684,6 +749,10 @@ bool saveScene(const std::string& path, const std::vector<uint8_t>& thumbnailRgb
         writePod(file, (uint8_t)c.enabled); writePod(file, c.walkSpeed); writePod(file, c.runSpeed); writePod(file, c.jumpSpeed);
         writePod(file, c.radius); writePod(file, c.height); writePod(file, (uint8_t)c.mouseLook);
         writePod(file, node.cameraFov);
+        // --- версия 4 ---
+        int32_t volumeRes = node.volume ? node.volume->resolution : 0;
+        writePod(file, volumeRes);
+        if (volumeRes > 0) file.write(reinterpret_cast<const char*>(node.volume->distances.data()), node.volume->distances.size() * sizeof(float));
     }
     writePod(file, world.sunAzimuth); writePod(file, world.sunElevation); writePod(file, world.sunIntensity);
     writePod(file, world.sunColor); writePod(file, world.skyTop); writePod(file, world.skyHorizon); writePod(file, world.ambient);
@@ -757,6 +826,18 @@ bool loadScene(const std::string& path, bool append) {
                 n.collider.shape = std::clamp(shape, 0, (int)COLLIDER_COUNT - 1);
                 a.enabled = flags[0]; a.loop = flags[1]; a.playOnStart = flags[2]; a.spatial = flags[3];
                 c.enabled = flags[4]; c.mouseLook = flags[5];
+            }
+            if (ok && extVersion >= 4) {
+                int32_t res = 0;
+                ok = readPod(file, res) && res >= 0 && res <= 256;
+                if (ok && res > 0) {
+                    auto volume = std::make_shared<SdfVolume>();
+                    volume->resolution = res;
+                    volume->distances.resize((size_t)res * res * res);
+                    file.read(reinterpret_cast<char*>(volume->distances.data()), volume->distances.size() * sizeof(float));
+                    ok = (bool)file;
+                    n.volume = volume;
+                }
             }
             if (!ok) break;
             n.active = active != 0; n.isTrigger = isTrigger != 0; n.behaviorOn = behaviorOn != 0;

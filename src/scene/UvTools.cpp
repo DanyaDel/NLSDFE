@@ -92,7 +92,14 @@ bool writeOBJ(const std::string& path, const std::vector<Vertex>& vertices) {
     std::ofstream f(path);
     if (!f.is_open()) return false;
     f << "# Exported by NLSDFE\n";
-    for (const auto& v : vertices) f << "v " << v.pos.x << " " << v.pos.y << " " << v.pos.z << "\n";
+    // Цвет пишется, только если он не белый у всех: так файл остаётся обычным OBJ
+    bool colored = false;
+    for (const auto& v : vertices) if (vec3(v.color) != vec3(1.0f)) { colored = true; break; }
+    for (const auto& v : vertices) {
+        f << "v " << v.pos.x << " " << v.pos.y << " " << v.pos.z;
+        if (colored) f << " " << v.color.r << " " << v.color.g << " " << v.color.b;
+        f << "\n";
+    }
     for (const auto& v : vertices) f << "vt " << v.uv.x << " " << v.uv.y << "\n";
     for (const auto& v : vertices) f << "vn " << v.normal.x << " " << v.normal.y << " " << v.normal.z << "\n";
     for (size_t i = 0; i + 2 < vertices.size(); i += 3) {

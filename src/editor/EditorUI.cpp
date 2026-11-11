@@ -2,6 +2,7 @@
 #include "Panels.h"
 #include "Project.h"
 #include "Demo.h"
+#include "Conversion.h"
 #include "Common.h"
 #include "Scene.h"
 #include "Settings.h"
@@ -432,6 +433,10 @@ static float drawHeaderBar(GLFWwindow* window, float y, bool editing) {
             if (ImGui::BeginMenu("Object")) {
                 if (ImGui::MenuItem("Duplicate", "Alt+D")) duplicateSelectedObject();
                 if (ImGui::MenuItem("Delete", "X")) deleteSelectedObject();
+                ImGui::Separator();
+                if (ImGui::MenuItem("Convert to Mesh...", nullptr, false, canConvert(CONVERT_TO_MESH))) requestConversion(CONVERT_TO_MESH);
+                if (ImGui::MenuItem("Convert to SDF Volume...", nullptr, false, canConvert(CONVERT_TO_VOLUME))) requestConversion(CONVERT_TO_VOLUME);
+                ImGui::Separator();
                 if (ImGui::MenuItem("Hide / Show", "H", false, !selectedIndices.empty())) {
                     saveUndo();
                     for (int idx : selectedIndices) if (idx < (int)sceneGraph.size()) sceneGraph[idx].active = !sceneGraph[idx].active;
@@ -505,6 +510,7 @@ void renderUI(GLFWwindow* window) {
     drawToast();
 
     drawExportWindow(window);
+    drawConversionPopup();
     renderSettingsWindow();
     renderChangelogWindow();
     renderAboutWindow();

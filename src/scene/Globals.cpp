@@ -14,6 +14,8 @@ std::vector<SceneNode> sceneGraph;
 std::vector<GpuObject> gpuObjectCache;
 std::vector<GpuLight> gpuLightCache;
 std::vector<GpuObject> collisionCache;
+std::vector<float> volumeData;
+uint64_t volumeDataVersion = 0;
 WorldSettings world;
 std::vector<int> selectedIndices;
 std::vector<SceneNode> clipboardNodes;

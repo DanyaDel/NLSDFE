@@ -2,6 +2,7 @@
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <memory>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <cmath>
@@ -75,7 +76,16 @@ enum NodeType {
     SDF_TORUS,
     SDF_CAPSULE,
     SDF_CONE,
+    SDF_PRIMITIVE_COUNT,                  // Формы, которые создаются из меню Add
+    SDF_VOLUME = SDF_PRIMITIVE_COUNT,     // Воксельная сетка расстояний (из меша)
     SDF_TYPE_COUNT
+};
+
+// Сетка расстояний resolution^3, покрывающая локальный куб [-1, 1]^3.
+// Расстояния — в тех же локальных единицах; узел масштабирует куб до нужного размера.
+struct SdfVolume {
+    int resolution = 0;
+    std::vector<float> distances;   // Индекс: x + res * (y + res * z)
 };
 
 enum CsgOp { OP_UNION = 0, OP_SUBTRACT, OP_INTERSECT };
@@ -96,10 +106,11 @@ struct GpuObject {
     vec4 rot1;   // w = CsgOp
     vec4 rot2;   // w = сглаживание
     vec4 pos;    // xyz, w = размер
-    vec4 scale;  // xyz, w = доп. параметр формы
+    vec4 scale;  // xyz, w = доп. параметр формы (у SDF_VOLUME — разрешение сетки)
     vec4 color;  // rgb, w = roughness
     vec4 bound;  // xyz = полуразмеры ограничивающего бокса (с запасом), w = metallic
-    vec4 extra;  // x = выделен, y = индекс узла в sceneGraph, z = 1 — первый в CSG-цепочке (всегда объединение)
+    vec4 extra;  // x = выделен, y = индекс узла в sceneGraph, z = 1 — первый в CSG-цепочке (всегда объединение),
+                 // w = смещение сетки в volumeData (SDF_VOLUME)
 };
 
 struct GpuLight {
@@ -215,6 +226,7 @@ struct SceneNode {
     AudioSource audio;
     CharacterController controller;
     float cameraFov = 60.0f;     // Для NODE_CAMERA, градусы по вертикали
+    std::shared_ptr<const SdfVolume> volume;   // Для SDF_VOLUME; общий при копировании и undo
 
     SceneNode() {
         gpuData.invRotation = mat4(1.0f);
@@ -316,7 +328,10 @@ extern std::vector<int> selectedIndices;
 extern std::vector<SceneNode> clipboardNodes;
 extern std::vector<GpuObject> gpuObjectCache;   // Обновляется updateSceneCaches()
 extern std::vector<GpuLight> gpuLightCache;
-extern std::vector<GpuObject> collisionCache;   // Коллайдеры: с этим полем работают физика и персонажи
+extern std::vector<GpuObject> collisionCache;
+// Все воксельные сетки сцены подряд: и шейдер, и CPU читают отсюда по смещению из GpuObject::extra.w
+extern std::vector<float> volumeData;
+extern uint64_t volumeDataVersion;           // Меняется, когда содержимое volumeData обновилось   // Коллайдеры: с этим полем работают физика и персонажи
 extern std::vector<MeshData> meshCache;
 extern Notification toast;
 extern std::string currentLoadedFile;

@@ -17,6 +17,11 @@ struct Object {
     vec4 extra;  // x = выделен
 };
 
+// Воксельные сетки расстояний всех SDF_VOLUME подряд; смещение — в extra.w объекта
+layout(std430, binding = 4) readonly buffer VolumeBuffer {
+    float volumeData[];
+};
+
 layout(std430, binding = 1) readonly buffer ObjectBuffer {
     Object objects[];
 } scene;
@@ -131,6 +136,22 @@ RayMask buildMask(vec3 ro, vec3 rd, float tMax, float pad) {
 
 bool maskEmpty(RayMask m) { return all(equal(m.bits, uvec4(0u))); }
 
+// Должно совпадать с sampleVolume() в Scene.cpp
+float sampleVolume(int offset, int res, vec3 v) {
+    vec3 c = clamp(v, vec3(-1.0), vec3(1.0));
+    float outside = length(v - c);
+    vec3 g = (c * 0.5 + 0.5) * float(res - 1);
+    ivec3 i0 = min(ivec3(floor(g)), ivec3(res - 2));
+    vec3 f = g - vec3(i0);
+    int base = offset + i0.x + res * (i0.y + res * i0.z);
+    int sy = res, sz = res * res;
+    float x00 = mix(volumeData[base], volumeData[base + 1], f.x);
+    float x10 = mix(volumeData[base + sy], volumeData[base + sy + 1], f.x);
+    float x01 = mix(volumeData[base + sz], volumeData[base + sz + 1], f.x);
+    float x11 = mix(volumeData[base + sy + sz], volumeData[base + sy + sz + 1], f.x);
+    return outside + mix(mix(x00, x10, f.y), mix(x01, x11, f.y), f.z);
+}
+
 float sdObject(int i, vec3 p) {
     mat3 rot = mat3(scene.objects[i].rot0.xyz, scene.objects[i].rot1.xyz, scene.objects[i].rot2.xyz);
     vec3 q = rot * (p - scene.objects[i].pos.xyz);
@@ -147,6 +168,7 @@ float sdObject(int i, vec3 p) {
     else if (type == 3) d = length(vec2(length(v.xz) - size, v.y)) - size * p2;
     else if (type == 4) { v.y -= clamp(v.y, -size, size); d = length(v) - size * p2; }
     else if (type == 5) d = sdCone(v, size, size, size * p2);
+    else if (type == 6) d = sampleVolume(int(scene.objects[i].extra.w), int(p2), v / size) * size;
     else d = length(v) - size;
     return d * minScale;
 }

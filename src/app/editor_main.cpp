@@ -35,6 +35,7 @@
 #include "App.h"
 #include "Project.h"
 #include "Demo.h"
+#include "Conversion.h"
 #include "ScriptSystem.h"
 #include "imgui.h"
 
@@ -48,6 +49,8 @@ struct LaunchOptions {
     std::string exportDir;     // --export: собрать игру в папку и выйти
     bool demo = false;         // --demo: открыть демо-сцену
     int select = -1;           // --select N: выделить узел (дымовой тест инспектора)
+    std::string convert;       // --convert mesh|volume: конвертировать выделенное при старте
+    int convertResolution = 64;
     int workspace = -1;        // --workspace 0..4: стартовая вкладка
     float hold = 0.0f;         // --hold N: поработать N секунд и выйти (дымовой тест интерфейса)
     int benchFrames = 0;       // --bench N: замерить N кадров и выйти
@@ -93,14 +96,22 @@ public:
 
         if (options.workspace >= 0) switchWorkspace((Workspace)std::clamp(options.workspace, 0, (int)WS_COUNT - 1));
 
-        if (options.select >= 0 && options.select < (int)sceneGraph.size()) selectedIndices = { options.select };
-
-        if (options.shadingMode >= 0) currentShadingMode = std::clamp(options.shadingMode, 0, 3);
         if (!options.openFile.empty()) {
             if (fs::path(options.openFile).extension() == ".obj") LoadMeshInternal(options.openFile);
             else PublicLoadNos(options.openFile, false);
         }
         if (options.benchObjects > 0) addBenchmarkObjects(options.benchObjects);
+
+        // Тестовые хуки: после того как сцена загружена
+        if (options.select >= 0 && options.select < (int)sceneGraph.size()) selectedIndices = { options.select };
+        if (!options.convert.empty()) {
+            updateSceneCaches();
+            bool ok = runConversion(options.convert == "mesh" ? CONVERT_TO_MESH : CONVERT_TO_VOLUME, options.convertResolution, false);
+            spdlog::info("Conversion to {}: {} ({} objects in scene)", options.convert, ok ? "ok" : "failed", sceneGraph.size());
+            if (!ok) exportFailed = true;
+        }
+
+        if (options.shadingMode >= 0) currentShadingMode = std::clamp(options.shadingMode, 0, 3);
 
         mainLoop();
 
@@ -332,6 +343,7 @@ static Engine* engine() { return reinterpret_cast<Engine*>(g_engine); }
 void Engine_PublicSaveNos(const std::string& path) { if (g_engine) engine()->PublicSaveNos(path); }
 void Engine_PublicLoadNos(const std::string& path, bool append) { if (g_engine) engine()->PublicLoadNos(path, append); }
 void Engine_LoadMesh(const std::string& path) { if (g_engine) engine()->LoadMeshInternal(path); }
+int Engine_LoadMeshFile(const std::string& path) { return g_engine ? engine()->getOrLoadMesh(path) : -1; }
 void* Engine_CreateUiTexture(const uint8_t* rgba, int w, int h) { return g_engine ? engine()->CreateUiTexture(rgba, w, h) : nullptr; }
 void Engine_DestroyUiTexture(void* textureId) { if (g_engine) engine()->DestroyUiTexture(textureId); }
 bool Engine_ExportGame(const std::string& directory) { return g_engine && engine()->ExportGame(directory); }
@@ -351,6 +363,8 @@ static void printUsage() {
         "  --export <dir>         export the game to a folder and exit\n"
         "  --workspace <0..3>     start in the Model, Scene, UV or Script editor\n"
         "  --hold <seconds>       run for a while and exit (UI smoke test)\n"
+        "  --select <n> --convert mesh|volume [--convert-resolution r]\n"
+        "                         convert node n at startup (test hook)\n"
         "  --bench <frames>       measure average frame time and exit\n"
         "  --bench-objects <n>    add n objects to the scene for --bench\n"
         "  --screenshot <out.ppm> save the SDF frame and exit\n"
@@ -372,6 +386,8 @@ int main(int argc, char** argv) {
             else if (a == "--demo") opts.demo = true;
             else if (a == "--workspace") opts.workspace = std::stoi(next());
             else if (a == "--select") opts.select = std::stoi(next());
+            else if (a == "--convert") { opts.convert = next(); if (opts.convert != "mesh" && opts.convert != "volume") throw std::runtime_error("--convert takes mesh or volume"); }
+            else if (a == "--convert-resolution") opts.convertResolution = std::stoi(next());
             else if (a == "--hold") opts.hold = std::stof(next());
             else if (a == "--export") opts.exportDir = next();
             else if (a == "--bench") opts.benchFrames = std::stoi(next());

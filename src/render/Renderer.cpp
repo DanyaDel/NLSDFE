@@ -149,6 +149,7 @@ void Renderer::cleanup() {
     vkDestroyPipeline(device, computePipeline, nullptr); vkDestroyPipelineLayout(device, computeLayout, nullptr);
     vkDestroyPipeline(device, meshPipeline, nullptr); vkDestroyPipelineLayout(device, meshLayout, nullptr);
     vkDestroyPipeline(device, compositePipeline, nullptr); vkDestroyPipelineLayout(device, compositeLayout, nullptr);
+    if (volumeBuffer) vmaDestroyBuffer(allocator, volumeBuffer, volumeAllocation);
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(device, computeSetLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, compositeSetLayout, nullptr);
@@ -482,9 +483,10 @@ void Renderer::createDescriptors() {
         {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
     };
     VkDescriptorSetLayoutCreateInfo computeInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    computeInfo.bindingCount = 4; computeInfo.pBindings = computeBindings;
+    computeInfo.bindingCount = 5; computeInfo.pBindings = computeBindings;
     vkCheck(vkCreateDescriptorSetLayout(device, &computeInfo, nullptr, &computeSetLayout), "vkCreateDescriptorSetLayout");
 
     VkDescriptorSetLayoutBinding compositeBindings[] = {
@@ -497,7 +499,7 @@ void Renderer::createDescriptors() {
 
     VkDescriptorPoolSize sizes[] = {
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 * FRAMES_IN_FLIGHT},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, FRAMES_IN_FLIGHT},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2 * FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, FRAMES_IN_FLIGHT},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2},
     };
@@ -526,6 +528,34 @@ void Renderer::createDescriptors() {
         vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
     }
     updateImageDescriptors();
+    uploadVolumes();
+}
+
+// Воксельные сетки: один общий буфер, пересоздаётся, когда набор сеток в сцене поменялся
+void Renderer::uploadVolumes() {
+    uploadedVolumeVersion = volumeDataVersion;
+    VkDeviceSize bytes = std::max<VkDeviceSize>(sizeof(float) * volumeData.size(), 16);
+    if (volumeBuffer) {
+        vkDeviceWaitIdle(device);   // Старый буфер может читать кадр, который ещё в работе
+        vmaDestroyBuffer(allocator, volumeBuffer, volumeAllocation);
+        volumeBuffer = VK_NULL_HANDLE;
+    }
+    createBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, volumeBuffer, volumeAllocation);
+    if (!volumeData.empty()) {
+        void* data;
+        vkCheck(vmaMapMemory(allocator, volumeAllocation, &data), "vmaMapMemory");
+        memcpy(data, volumeData.data(), volumeData.size() * sizeof(float));
+        vmaFlushAllocation(allocator, volumeAllocation, 0, VK_WHOLE_SIZE);
+        vmaUnmapMemory(allocator, volumeAllocation);
+    }
+    VkDescriptorBufferInfo info{volumeBuffer, 0, VK_WHOLE_SIZE};
+    for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet = computeSets[i]; write.dstBinding = 4;
+        write.descriptorCount = 1; write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; write.pBufferInfo = &info;
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    }
+    forceRender = true;
 }
 
 // Вызывается после каждого пересоздания offscreen-картинок
@@ -863,6 +893,7 @@ void Renderer::drawFrame(GLFWwindow* window, bool& framebufferResized) {
     checkShaderHotReload();
     if (gfxSwapchainDirty) { gfxSwapchainDirty = false; recreateSwapchain(window); }
 
+    if (uploadedVolumeVersion != volumeDataVersion) uploadVolumes();
     vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
     readTimestamps(currentFrame);
 

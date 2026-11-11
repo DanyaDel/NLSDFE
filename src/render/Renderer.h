@@ -105,6 +105,7 @@ private:
     void createSceneBuffers();
     void createDescriptors();
     void updateImageDescriptors();
+    void uploadVolumes();
     void createComputePipeline();
     void createGraphicsPipeline();
     void createCompositePipeline();
@@ -182,6 +183,10 @@ private:
     VmaAllocation sceneAllocations[FRAMES_IN_FLIGHT]{}, uboAllocations[FRAMES_IN_FLIGHT]{};
     void* sceneMapped[FRAMES_IN_FLIGHT]{};
     void* uboMapped[FRAMES_IN_FLIGHT]{};
+
+    VkBuffer volumeBuffer = VK_NULL_HANDLE;
+    VmaAllocation volumeAllocation = VK_NULL_HANDLE;
+    uint64_t uploadedVolumeVersion = ~0ull;
 
     // Замер времени compute-прохода
     VkQueryPool queryPool = VK_NULL_HANDLE;
