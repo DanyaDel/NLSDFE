@@ -11,4 +11,6 @@ void loadMesh(const std::string& path);
 void* createUiTexture(const uint8_t* rgba, int w, int h);
 void destroyUiTexture(void* textureId);
 bool exportGame(const std::string& directory);
-const std::vector<std::string>& exportLog();   // Что попало в последнюю сборку и что пошло не так
+const std::vector<std::string>& exportLog();
+void updateMesh(int meshIdx);                  // Перезалить вершины меша в GPU
+bool saveScreenshot(const std::string& path);  // SDF-кадр в .ppm   // Что попало в последнюю сборку и что пошло не так

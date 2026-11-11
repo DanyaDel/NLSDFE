@@ -47,6 +47,7 @@ struct LaunchOptions {
     std::string project;       // --project: папка проекта
     std::string exportDir;     // --export: собрать игру в папку и выйти
     bool demo = false;         // --demo: открыть демо-сцену
+    int select = -1;           // --select N: выделить узел (дымовой тест инспектора)
     int workspace = -1;        // --workspace 0..4: стартовая вкладка
     float hold = 0.0f;         // --hold N: поработать N секунд и выйти (дымовой тест интерфейса)
     int benchFrames = 0;       // --bench N: замерить N кадров и выйти
@@ -95,8 +96,13 @@ public:
 
         if (options.workspace >= 0) switchWorkspace((Workspace)std::clamp(options.workspace, 0, (int)WS_COUNT - 1));
 
+        if (options.select >= 0 && options.select < (int)sceneGraph.size()) selectedIndices = { options.select };
+
         if (options.shadingMode >= 0) currentShadingMode = std::clamp(options.shadingMode, 0, 3);
-        if (!options.openFile.empty()) PublicLoadNos(options.openFile, false);
+        if (!options.openFile.empty()) {
+            if (fs::path(options.openFile).extension() == ".obj") LoadMeshInternal(options.openFile);
+            else PublicLoadNos(options.openFile, false);
+        }
         if (options.benchObjects > 0) addBenchmarkObjects(options.benchObjects);
 
         mainLoop();
@@ -195,6 +201,16 @@ public:
             note("script    " + fs::relative(target, out, ec).generic_string());
         }
 
+        // Звуки сохраняют свои пути относительно проекта
+        for (const auto& node : sceneGraph) {
+            if (!node.audio.enabled || node.audio.clip.empty()) continue;
+            fs::path target = out / project.relative(project.path(node.audio.clip));
+            fs::create_directories(target.parent_path(), ec);
+            fs::copy_file(project.path(node.audio.clip), target, fs::copy_options::overwrite_existing, ec);
+            if (ec) return fail("cannot copy sound " + node.audio.clip + ": " + ec.message());
+            note("sound     " + node.audio.clip);
+        }
+
         // Меши кладём рядом со сценой: загрузчик ищет их там, если исходного пути нет
         for (const auto& node : sceneGraph) {
             if (node.meshPath.empty()) continue;
@@ -219,6 +235,9 @@ public:
         spdlog::info("Game exported to {}", directory);
         return true;
     }
+
+    void UpdateMesh(int meshIdx) { if (meshIdx >= 0 && meshIdx < (int)meshCache.size()) renderer.updateMeshVertices(meshCache[meshIdx]); }
+    bool SaveScreenshot(const std::string& path) { writeScreenshot(path); return fs::exists(path); }
 
     std::vector<std::string> exportLog;
     bool exportFailed = false;
@@ -313,6 +332,8 @@ void Engine_LoadMesh(const std::string& path) { if (g_engine) engine()->LoadMesh
 void* Engine_CreateUiTexture(const uint8_t* rgba, int w, int h) { return g_engine ? engine()->CreateUiTexture(rgba, w, h) : nullptr; }
 void Engine_DestroyUiTexture(void* textureId) { if (g_engine) engine()->DestroyUiTexture(textureId); }
 bool Engine_ExportGame(const std::string& directory) { return g_engine && engine()->ExportGame(directory); }
+void Engine_UpdateMesh(int meshIdx) { if (g_engine) engine()->UpdateMesh(meshIdx); }
+bool Engine_SaveScreenshot(const std::string& path) { return g_engine && engine()->SaveScreenshot(path); }
 const std::vector<std::string>& Engine_ExportLog() { static const std::vector<std::string> empty; return g_engine ? engine()->exportLog : empty; }
 
 static void printUsage() {
@@ -325,7 +346,7 @@ static void printUsage() {
         "  --project <dir>        open a project folder (assets/, scenes/, scripts/)\n"
         "  --demo                 load the demo scene with physics and scripts\n"
         "  --export <dir>         export the game to a folder and exit\n"
-        "  --workspace <0..4>     start in Import, Model, Scene, Script or Export\n"
+        "  --workspace <0..3>     start in the Model, Scene, UV or Script editor\n"
         "  --hold <seconds>       run for a while and exit (UI smoke test)\n"
         "  --bench <frames>       measure average frame time and exit\n"
         "  --bench-objects <n>    add n objects to the scene for --bench\n"
@@ -347,6 +368,7 @@ int main(int argc, char** argv) {
             else if (a == "--project") opts.project = next();
             else if (a == "--demo") opts.demo = true;
             else if (a == "--workspace") opts.workspace = std::stoi(next());
+            else if (a == "--select") opts.select = std::stoi(next());
             else if (a == "--hold") opts.hold = std::stof(next());
             else if (a == "--export") opts.exportDir = next();
             else if (a == "--bench") opts.benchFrames = std::stoi(next());

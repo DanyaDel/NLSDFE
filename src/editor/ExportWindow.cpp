@@ -1,4 +1,4 @@
-// Export: сборка игры. В папку попадают плеер, шейдеры, сцена, меши и скомпилированные скрипты.
+// File > Export > Game: в папку попадают плеер, шейдеры, сцена, меши, звуки и скомпилированные скрипты.
 #include "Panels.h"
 #include "Project.h"
 #include "Settings.h"
@@ -7,17 +7,16 @@
 #include "imgui.h"
 #include <cstring>
 
-void drawExportWorkspace(GLFWwindow* window, const WorkArea& area) {
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoTitleBar;
-    ImGui::SetNextWindowPos(ImVec2(area.x, area.y)); ImGui::SetNextWindowSize(ImVec2(area.w, area.h));
-    ImGui::Begin("ExportPanel", nullptr, flags);
+bool showExportWindow = false;
 
-    ImGui::SetWindowFontScale(1.4f);
-    ImGui::TextUnformatted("Export Game");
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::TextDisabled("The scene currently open in the Scene workspace becomes the game.");
+void drawExportWindow(GLFWwindow* window) {
+    if (!showExportWindow) return;
+    ImGui::SetNextWindowSize(ImVec2(620, 460), ImGuiCond_FirstUseEver);
+    if (!ImGui::Begin("Export Game", &showExportWindow, ImGuiWindowFlags_NoCollapse)) { ImGui::End(); return; }
+
+    ImGui::TextDisabled("The scene open in the Scene Editor becomes the game.");
     ImGui::Separator();
-    ImGui::PushItemWidth(std::min(420.0f, area.w * 0.6f));
+    ImGui::PushItemWidth(-180.0f);
 
     bool changed = false;
     char nameBuf[128];

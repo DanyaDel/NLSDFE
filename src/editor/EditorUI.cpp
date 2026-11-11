@@ -29,6 +29,15 @@ struct ChangelogEntry {
 };
 
 const std::vector<ChangelogEntry> appChangelog = {
+    ChangelogEntry("v1.4.0 - Game Engine", "11.11.2026", {
+        "Engine split into modules; separate player executable for exported games",
+        "Editor modes: Model, Scene, UV and Script editors; import and export in the File menu",
+        "Components: Collider, Rigid Body, Character Controller, Audio Source, Script, Behavior",
+        "Rigid body physics on SDF colliders",
+        "NLS: the engine's own compiled scripting language with a built-in editor",
+        "Camera objects: Play Mode (F5) looks through the scene camera",
+        "UV editor for imported meshes; project folders; demo scene"
+    }),
     ChangelogEntry("v1.3.0 - Potato Update", "10.11.2026", {
         "Runs on Vulkan 1.0 hardware, no optional GPU features required",
         "Per-ray object culling, render-on-demand and dynamic resolution",
@@ -105,7 +114,7 @@ void renderAboutWindow() {
         ImGui::PopStyleColor();
         ImGui::SetWindowFontScale(1.0f);
         ImGui::Dummy(ImVec2(0, 10));
-        TextCentered("Potato Update " + ENGINE_VERSION);
+        TextCentered("Game Engine " + ENGINE_VERSION);
         ImGui::Dummy(ImVec2(0, 10));
         TextCentered("GPU: " + renderStats.gpuName);
 
@@ -252,6 +261,218 @@ void beginUIFrame() {
 
 bool uiNeedsAnimation() { return toast.active; }
 
+// --- File > Import: внешний файл копируется в проект и сразу идёт в дело ---
+static void importMesh(GLFWwindow* window) {
+    std::string path = FileDialogs::OpenFile(window, OBJ_FILTER);
+    if (path.empty()) return;
+    std::string imported = importIntoProject(path, "assets");
+    if (imported.empty()) { showToast("Import failed"); return; }
+    if (!workspaceHasViewport(currentWorkspace)) switchWorkspace(WS_SCENE);
+    loadMesh(imported);
+}
+
+static void importModel(GLFWwindow* window) {
+    std::string path = FileDialogs::OpenFile(window, NOS_FILTER);
+    if (path.empty()) return;
+    std::string imported = importIntoProject(path, "assets");
+    if (imported.empty()) { showToast("Import failed"); return; }
+    rescanAssets();
+    if (!workspaceHasViewport(currentWorkspace)) switchWorkspace(WS_SCENE);
+    appendNos(imported);
+}
+
+static void importScript(GLFWwindow* window) {
+    std::string path = FileDialogs::OpenFile(window, SCRIPT_FILTER);
+    if (path.empty()) return;
+    std::string imported = importIntoProject(path, "scripts");
+    if (imported.empty()) { showToast("Import failed"); return; }
+    openScriptInEditor(project.relative(imported));
+}
+
+static void importSound(GLFWwindow* window) {
+    std::string path = FileDialogs::OpenFile(window, SOUND_FILTER);
+    if (path.empty()) return;
+    std::string imported = importIntoProject(path, "assets/sounds");
+    showToast(imported.empty() ? "Import failed" : "Sound imported: choose it in an Audio Source component");
+}
+
+static void exportScreenshot(GLFWwindow* window) {
+    std::string path = FileDialogs::SaveFile(window, "PPM Image (*.ppm)\0*.ppm\0", project.root);
+    if (path.empty()) return;
+    if (path.find(".ppm") == std::string::npos) path += ".ppm";
+    showToast(saveScreenshot(path) ? "Screenshot saved" : "Screenshot failed");
+}
+
+// Верхняя строка: меню приложения
+static float drawMainMenu(GLFWwindow* window, bool editing) {
+    float height = 0.0f;
+    if (!ImGui::BeginMainMenuBar()) return height;
+    height = ImGui::GetWindowSize().y;
+
+    if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem(editingModel() ? "New Model" : "New Scene", "Ctrl+N")) newDocument();
+        if (ImGui::MenuItem("Open...", "Ctrl+O")) actionOpenScene(window);
+        if (ImGui::MenuItem("Save", "Ctrl+S")) actionSaveScene(window);
+        if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) actionSaveSceneAs(window);
+        if (ImGui::MenuItem("Append...")) { std::string path = FileDialogs::OpenFile(window, NOS_FILTER); if (!path.empty()) appendNos(path); }
+        ImGui::Separator();
+        if (ImGui::BeginMenu("Import")) {
+            if (ImGui::MenuItem("Mesh (.obj)...")) importMesh(window);
+            if (ImGui::MenuItem("Model or Scene (.nos)...")) importModel(window);
+            if (ImGui::MenuItem("Script (.nls)...")) importScript(window);
+            if (ImGui::MenuItem("Sound (.wav, .mp3, .flac)...")) importSound(window);
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Export")) {
+            if (ImGui::MenuItem("Game...")) { if (editingModel()) switchWorkspace(WS_SCENE); showExportWindow = true; }
+            if (ImGui::MenuItem("Screenshot (.ppm)...")) exportScreenshot(window);
+            ImGui::EndMenu();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Open Project Folder...")) {
+            std::string dir = FileDialogs::SelectFolder(window);
+            if (!dir.empty() && openProject(dir)) { rescanAssets(); saveSettings(settingsPath()); showToast("Project: " + project.name); }
+        }
+        if (ImGui::MenuItem("Load Demo Scene")) { switchWorkspace(WS_SCENE); loadDemoScene(); }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Quit", "Alt+F4")) { glfwSetWindowShouldClose(window, true); }
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Edit")) {
+        if (ImGui::MenuItem("Undo", "Ctrl+Z", false, editing && !undoStack.empty())) { performUndo(); }
+        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, editing && !redoStack.empty())) { performRedo(); }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Duplicate", "Alt+D", false, editing)) { duplicateSelectedObject(); }
+        if (ImGui::MenuItem("Delete", "X", false, editing)) { deleteSelectedObject(); }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Preferences...")) showSettingsWindow = true;
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Render")) {
+        const char* names[] = { "Wireframe / Heatmap", "Solid", "Material Preview", "Rendered" };
+        const char* keys[] = { "F1", "F2", "F3", "F4" };
+        for (int i = 0; i < 4; i++) if (ImGui::MenuItem(names[i], keys[i], currentShadingMode == i)) currentShadingMode = i;
+        ImGui::Separator();
+        if (ImGui::BeginMenu("Quality")) {
+            for (int p = 0; p < PRESET_CUSTOM; p++) {
+                if (ImGui::MenuItem(presetName(p), nullptr, gfx.preset == p)) { applyPreset(p); saveSettings(settingsPath()); }
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::MenuItem("Play", "F5")) actionPlay(window);
+        if (ImGui::MenuItem("Save Screenshot...")) exportScreenshot(window);
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Window")) {
+        ImGui::MenuItem("Toolbar", "T", &showToolbar);
+        ImGui::MenuItem("Sidebar", "N", &showSidebar);
+        ImGui::MenuItem("Asset Browser", nullptr, &showAssetBrowser);
+        if (ImGui::MenuItem("Stats Overlay", nullptr, &editorCfg.showStats)) saveSettings(settingsPath());
+        ImGui::Separator();
+        ImGui::MenuItem("Export Game", nullptr, &showExportWindow);
+        ImGui::MenuItem("Preferences", nullptr, &showSettingsWindow);
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Help")) {
+        if (ImGui::MenuItem("Controls")) showSettingsWindow = true;
+        if (ImGui::MenuItem("What's New")) showChangelog = true;
+        if (ImGui::MenuItem("About")) showAboutWindow = true;
+        ImGui::EndMenu();
+    }
+
+    // Справа: проект и открытый файл
+    std::string title = project.name + "  |  " + std::filesystem::path(currentLoadedFile).filename().string();
+    float width = ImGui::CalcTextSize(title.c_str()).x;
+    ImGui::SameLine(ImGui::GetWindowWidth() - width - 16.0f);
+    ImGui::TextDisabled("%s", title.c_str());
+
+    ImGui::EndMainMenuBar();
+    return height;
+}
+
+// Вторая строка: режимы редактора и меню текущего вида
+static float drawHeaderBar(GLFWwindow* window, float y, bool editing) {
+    ImGuiIO& io = ImGui::GetIO();
+    const ImVec4 accent(0.28f, 0.56f, 0.90f, 1.0f);
+    const float height = ImGui::GetFrameHeight() + 10.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(0, y)); ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, height));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 5));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.14f, 0.14f, 0.15f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImVec4(0.14f, 0.14f, 0.15f, 1.0f));
+    ImGui::Begin("HeaderBar", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar
+                 | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_MenuBar);
+    if (ImGui::BeginMenuBar()) {
+        // Режимы
+        for (int ws = 0; ws < WS_COUNT; ws++) {
+            bool current = currentWorkspace == ws;
+            if (current) ImGui::PushStyleColor(ImGuiCol_Button, accent);
+            if (ImGui::Button(workspaceName((Workspace)ws))) switchWorkspace((Workspace)ws);
+            if (current) ImGui::PopStyleColor();
+        }
+
+        if (editing) {
+            ImGui::TextDisabled("|");
+            if (ImGui::BeginMenu("View")) {
+                if (ImGui::MenuItem("Floor Grid", "G", &editorCfg.showGrid)) saveSettings(settingsPath());
+                ImGui::MenuItem("Gizmos", nullptr, &showGizmos);
+                if (ImGui::MenuItem("Focus Selection", "F", false, !selectedIndices.empty())) cam.target = getSelectionCenter();
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Select")) {
+                if (ImGui::MenuItem("All", "Ctrl+A")) actionSelectAll();
+                if (ImGui::MenuItem("None", "Alt+A")) selectedIndices.clear();
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Add")) { addMenuItems(window); ImGui::EndMenu(); }
+            if (ImGui::BeginMenu("Object")) {
+                if (ImGui::MenuItem("Duplicate", "Alt+D")) duplicateSelectedObject();
+                if (ImGui::MenuItem("Delete", "X")) deleteSelectedObject();
+                if (ImGui::MenuItem("Hide / Show", "H", false, !selectedIndices.empty())) {
+                    saveUndo();
+                    for (int idx : selectedIndices) if (idx < (int)sceneGraph.size()) sceneGraph[idx].active = !sceneGraph[idx].active;
+                }
+                ImGui::EndMenu();
+            }
+
+            ImGui::TextDisabled("|");
+            auto toggle = [&](const char* label, bool on, const char* tip) {
+                if (on) ImGui::PushStyleColor(ImGuiCol_Button, accent);
+                bool clicked = ImGui::Button(label);
+                if (on) ImGui::PopStyleColor();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+                return clicked;
+            };
+            if (toggle("Snap", editorCfg.snap, "Snap to grid while dragging (Ctrl inverts)")) { editorCfg.snap = !editorCfg.snap; saveSettings(settingsPath()); }
+            ImGui::SetNextItemWidth(70.0f);
+            if (ImGui::DragFloat("##snapstep", &editorCfg.snapStep, 0.05f, 0.05f, 10.0f, "%.2f m") && !ImGui::IsItemActive()) saveSettings(settingsPath());
+
+            // Справа: запуск и режим затенения
+            const float buttonWidth = 25.0f;
+            float rightWidth = 4 * buttonWidth + 5 * ImGui::GetStyle().ItemSpacing.x + 64.0f;
+            ImGui::SameLine(ImGui::GetWindowWidth() - rightWidth - 12.0f);
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.45f, 0.2f, 1.0f));
+            if (ImGui::Button("Play", ImVec2(60.0f, 0))) actionPlay(window);
+            ImGui::PopStyleColor();
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Run the scene through its camera (F5)");
+            const char* labels[] = {"W", "S", "M", "R"};
+            const char* tips[] = {"Wireframe / heatmap (F1)", "Solid (F2)", "Material (F3)", "Rendered (F4)"};
+            for (int i = 0; i < 4; i++) {
+                if (toggle(labels[i], currentShadingMode == i, tips[i])) currentShadingMode = i;
+            }
+        }
+        ImGui::EndMenuBar();
+    }
+    ImGui::End();
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar();
+    return height;
+}
+
 void renderUI(GLFWwindow* window) {
     ImGuiIO& io = ImGui::GetIO();
 
@@ -267,112 +488,23 @@ void renderUI(GLFWwindow* window) {
         isFirstRunCheckDone = true;
     }
 
-    bool editing = currentWorkspace == WS_MODEL || currentWorkspace == WS_SCENE;
-    const ImVec4 accent(0.28f, 0.56f, 0.90f, 1.0f);
+    bool editing = workspaceHasViewport(currentWorkspace);
+    float top = drawMainMenu(window, editing);
+    top += drawHeaderBar(window, top, editing);
 
-    float menuHeight = 0.0f;
-    if (ImGui::BeginMainMenuBar()) {
-        menuHeight = ImGui::GetWindowSize().y;
-
-        // Рабочие пространства — слева направо по ходу работы над игрой
-        for (int ws = 0; ws < WS_COUNT; ws++) {
-            bool current = currentWorkspace == ws;
-            if (current) ImGui::PushStyleColor(ImGuiCol_Button, accent);
-            if (ImGui::Button(workspaceName((Workspace)ws))) switchWorkspace((Workspace)ws);
-            if (current) ImGui::PopStyleColor();
-        }
-        ImGui::Separator();
-
-        if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem(editingModel() ? "New Model" : "New Scene", "Ctrl+N")) newDocument();
-            if (ImGui::MenuItem("Load Demo Scene")) { switchWorkspace(WS_SCENE); loadDemoScene(); }
-            if (ImGui::MenuItem("Open...", "Ctrl+O")) actionOpenScene(window);
-            if (ImGui::MenuItem("Append...")) { std::string path = FileDialogs::OpenFile(window, NOS_FILTER); if (!path.empty()) appendNos(path); }
-            if (ImGui::MenuItem("Save", "Ctrl+S")) actionSaveScene(window);
-            if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S")) actionSaveSceneAs(window);
-            ImGui::Separator();
-            if (ImGui::MenuItem("Open Project Folder...")) {
-                std::string dir = FileDialogs::SelectFolder(window);
-                if (!dir.empty() && openProject(dir)) { rescanAssets(); saveSettings(settingsPath()); showToast("Project: " + project.name); }
-            }
-            if (ImGui::MenuItem("Settings...")) showSettingsWindow = true;
-            if (ImGui::BeginMenu("Help")) {
-                if (ImGui::MenuItem("Changelog")) showChangelog = true;
-                if (ImGui::MenuItem("About Engine")) showAboutWindow = true;
-                ImGui::EndMenu();
-            }
-            ImGui::Separator();
-            if (ImGui::MenuItem("Exit", "Alt+F4")) { glfwSetWindowShouldClose(window, true); }
-            ImGui::EndMenu();
-        }
-
-        if (editing) {
-            if (ImGui::BeginMenu("Edit")) {
-                if (ImGui::MenuItem("Undo", "Ctrl+Z", false, !undoStack.empty())) { performUndo(); }
-                if (ImGui::MenuItem("Redo", "Ctrl+Y", false, !redoStack.empty())) { performRedo(); }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Duplicate", "Alt+D")) { duplicateSelectedObject(); }
-                if (ImGui::MenuItem("Delete", "X")) { deleteSelectedObject(); }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Select All", "Ctrl+A")) actionSelectAll();
-                if (ImGui::MenuItem("Select None", "Alt+A")) { selectedIndices.clear(); }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Snap to Grid", nullptr, &editorCfg.snap)) saveSettings(settingsPath());
-                ImGui::EndMenu();
-            }
-
-            if (ImGui::BeginMenu("Add")) { addMenuItems(window); ImGui::EndMenu(); }
-
-            if (ImGui::BeginMenu("View")) {
-                ImGui::MenuItem("Toolbar", "T", &showToolbar);
-                ImGui::MenuItem("Sidebar", "N", &showSidebar);
-                ImGui::MenuItem("Assets", nullptr, &showAssetBrowser);
-                ImGui::Separator();
-                if (ImGui::MenuItem("Floor Grid", "G", &editorCfg.showGrid)) saveSettings(settingsPath());
-                ImGui::MenuItem("Gizmos", nullptr, &showGizmos);
-                if (ImGui::MenuItem("Stats", nullptr, &editorCfg.showStats)) saveSettings(settingsPath());
-                ImGui::EndMenu();
-            }
-
-            float buttonWidth = 25.0f;
-            float totalWidth = 4 * buttonWidth + 4 * ImGui::GetStyle().ItemSpacing.x + 60.0f;
-            ImGui::SameLine(ImGui::GetWindowWidth() - totalWidth - 20.0f);
-            if (currentWorkspace == WS_SCENE) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.45f, 0.2f, 1.0f));
-                if (ImGui::Button("Play", ImVec2(60.0f, 0))) actionPlay(window);
-                ImGui::PopStyleColor();
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Play Mode (F5)");
-            } else {
-                ImGui::Dummy(ImVec2(60.0f, 0));
-            }
-            ImGui::SameLine();
-            const char* labels[] = {"W", "S", "M", "R"};
-            const char* tips[] = {"Wireframe / heatmap (F1)", "Solid (F2)", "Material (F3)", "Rendered (F4)"};
-            for(int i=0; i<4; i++) {
-                bool current = currentShadingMode == i;
-                if (current) ImGui::PushStyleColor(ImGuiCol_Button, accent);
-                if (ImGui::Button(labels[i], ImVec2(buttonWidth, 0))) currentShadingMode = i;
-                if (current) ImGui::PopStyleColor();
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tips[i]);
-                if(i < 3) ImGui::SameLine();
-            }
-        }
-        ImGui::EndMainMenuBar();
-    }
-
-    WorkArea area = { 0.0f, menuHeight, io.DisplaySize.x, std::max(io.DisplaySize.y - menuHeight, 1.0f) };
-    // Вкладки без 3D-вида вьюпорт не занимают — и SDF-кадр для них не считается
+    WorkArea area = { 0.0f, top, io.DisplaySize.x, std::max(io.DisplaySize.y - top, 1.0f) };
+    // Без 3D-вида вьюпорт не занят — и SDF-кадр не считается
     if (!editing) viewportRect = vec4(0.0f);
     switch (currentWorkspace) {
-        case WS_IMPORT: drawImportWorkspace(window, area); break;
         case WS_MODEL: drawModelWorkspace(window, area); break;
         case WS_SCENE: drawSceneWorkspace(window, area); break;
+        case WS_UV: drawUvWorkspace(window, area); break;
         case WS_SCRIPT: drawScriptWorkspace(window, area); break;
-        case WS_EXPORT: drawExportWorkspace(window, area); break;
         default: break;
     }
     drawToast();
 
+    drawExportWindow(window);
     renderSettingsWindow();
     renderChangelogWindow();
     renderAboutWindow();

@@ -14,3 +14,5 @@ const std::vector<std::string>& exportLog() { return Engine_ExportLog(); }
 
 // Остальные функции (resetScene, deleteSelectedObject и т.д.) 
 // удалены отсюда, так как они теперь реализованы напрямую в Scene.cpp
+void updateMesh(int meshIdx) { Engine_UpdateMesh(meshIdx); }
+bool saveScreenshot(const std::string& path) { return Engine_SaveScreenshot(path); }

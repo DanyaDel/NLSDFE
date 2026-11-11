@@ -7,7 +7,8 @@ struct WorkArea { float x, y, w, h; };   // Место под главным м�
 
 extern const char* NOS_FILTER;
 extern const char* OBJ_FILTER;
-extern const char* IMPORT_FILTER;
+extern const char* SCRIPT_FILTER;
+extern const char* SOUND_FILTER;
 
 void TextCentered(std::string text);
 void addMenuItems(GLFWwindow* window);
@@ -22,11 +23,13 @@ void rescanAssets();
 // Общая раскладка моделлера и сцены: тулбар, вьюпорт, иерархия, инспектор, ассеты
 void drawEditingLayout(GLFWwindow* window, const WorkArea& area, bool gameplay);
 
-// Рабочие пространства (editor/workspaces/)
-void drawImportWorkspace(GLFWwindow* window, const WorkArea& area);
+// Режимы редактора (editor/workspaces/)
 void drawModelWorkspace(GLFWwindow* window, const WorkArea& area);
 void drawSceneWorkspace(GLFWwindow* window, const WorkArea& area);
+void drawUvWorkspace(GLFWwindow* window, const WorkArea& area);
 void drawScriptWorkspace(GLFWwindow* window, const WorkArea& area);
-void drawExportWorkspace(GLFWwindow* window, const WorkArea& area);
 void openScriptInEditor(const std::string& projectRelativePath);
 
+// Окно File > Export > Game
+extern bool showExportWindow;
+void drawExportWindow(GLFWwindow* window);

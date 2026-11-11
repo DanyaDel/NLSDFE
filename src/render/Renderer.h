@@ -60,6 +60,7 @@ public:
     // Helpers for Engine
     void createBuffer(VkDeviceSize s, VkBufferUsageFlags u, VmaMemoryUsage vmaUsage, VkBuffer& b, VmaAllocation& a);
     bool uploadMesh(const OBJModel& model, MeshData& out);
+    void updateMeshVertices(MeshData& mesh);   // Перезаливает mesh.vertices в GPU (после правки UV)
     std::vector<uint8_t> captureScreenshot(int& outW, int& outH);   // RGBA последнего SDF-кадра (без UI)
     void setupInternalLogo(GLFWwindow* window);
 

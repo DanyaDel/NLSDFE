@@ -20,6 +20,13 @@ void main() {
 
     // Simple Lambertian to match the SDF Solid/Material mode feel
     float diff = max(dot(N, L), 0.0);
-    vec3 col = fragColor.rgb * (0.2 + 0.1 * N.y + diff);
+    vec3 base = fragColor.rgb;
+    if (pc.color.a > 0.5) {
+        // Шахматка 8x8 на единичный квадрат UV: по ней видно растяжения развёртки
+        vec2 cell = floor(fragTexCoord * 8.0);
+        float checker = mod(cell.x + cell.y, 2.0);
+        base = mix(vec3(0.25), vec3(0.9), checker) * mix(vec3(1.0), vec3(fract(fragTexCoord), 0.5), 0.35);
+    }
+    vec3 col = base * (0.2 + 0.1 * N.y + diff);
     outColor = vec4(col, 1.0);
 }

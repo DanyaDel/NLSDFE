@@ -18,7 +18,7 @@ const int INITIAL_WIDTH = 1280;
 const int INITIAL_HEIGHT = 720;
 const std::string SHADER_SOURCE = "shaders/shader.comp";
 const std::string SHADER_BINARY = "shader.spv";
-const std::string ENGINE_VERSION = "v1.3.0";
+const std::string ENGINE_VERSION = "v1.4.0";
 const int MAX_OBJECTS = 128;   // Лимит узлов сцены (и ширина битовой маски отсечения в шейдере)
 const int MAX_LIGHTS = 8;      // Точечные источники света
 
@@ -58,6 +58,8 @@ struct MeshData {
     std::string path;
     vec3 boundsMin = {0, 0, 0};
     vec3 boundsMax = {0, 0, 0};
+    std::vector<Vertex> vertices;      // Копия геометрии на CPU: по три вершины на треугольник
+    bool showChecker = false;          // Шахматка по UV вместо цвета (UV-редактор)
 };
 
 // --- Scene Structs ---

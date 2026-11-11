@@ -14,3 +14,5 @@ void* Engine_CreateUiTexture(const uint8_t* rgba, int w, int h);
 void Engine_DestroyUiTexture(void* textureId);
 bool Engine_ExportGame(const std::string& directory);
 const std::vector<std::string>& Engine_ExportLog();
+void Engine_UpdateMesh(int meshIdx);
+bool Engine_SaveScreenshot(const std::string& path);

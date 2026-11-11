@@ -4,6 +4,8 @@
 #include "ScriptSystem.h"
 #include <filesystem>
 #include <fstream>
+#include <cmath>
+#include <cstdint>
 
 namespace {
     void writeScript(const char* name, const char* source) {
@@ -11,6 +13,25 @@ namespace {
         std::error_code ec;
         if (std::filesystem::exists(path, ec)) return;
         std::ofstream(path) << source;
+    }
+
+    // Короткий затухающий «тук» — чтобы в демо был звук без внешних файлов
+    void writeBeep(const std::string& path) {
+        std::error_code ec;
+        if (std::filesystem::exists(path, ec)) return;
+        const uint32_t rate = 22050, count = rate / 5;
+        std::vector<int16_t> samples(count);
+        for (uint32_t i = 0; i < count; i++) {
+            float t = (float)i / rate;
+            samples[i] = (int16_t)(std::sin(t * 6.2831853f * (220.0f - 300.0f * t)) * std::exp(-t * 18.0f) * 26000.0f);
+        }
+        uint32_t dataSize = count * 2, riffSize = 36 + dataSize, fmtSize = 16, byteRate = rate * 2;
+        uint16_t format = 1, channels = 1, blockAlign = 2, bits = 16;
+        std::ofstream f(path, std::ios::binary);
+        auto put = [&](const void* p, size_t n) { f.write((const char*)p, n); };
+        put("RIFF", 4); put(&riffSize, 4); put("WAVEfmt ", 8); put(&fmtSize, 4); put(&format, 2); put(&channels, 2);
+        put(&rate, 4); put(&byteRate, 4); put(&blockAlign, 2); put(&bits, 2); put("data", 4); put(&dataSize, 4);
+        put(samples.data(), dataSize);
     }
 
     int add(const char* name, int type, vec3 pos, vec3 scale, vec3 color) {
@@ -52,6 +73,7 @@ void loadDemoScene() {
         "on collide(other: node) {\n"
         "    hits += 1\n"
         "    self.color = vec3(random(), random(), random())\n"
+        "    self.playSound()\n"
         "}\n"
         "\n"
         "on update(dt: float) {\n"
@@ -79,6 +101,8 @@ void loadDemoScene() {
         "    }\n"
         "}\n");
 
+    writeBeep(project.path("assets/sounds/hit.wav"));
+
     nls::registerEngineBindings();
     resetScene();
     sceneGraph.erase(sceneGraph.begin() + 3);                       // Камеру по умолчанию заменит камера игрока
@@ -97,6 +121,9 @@ void loadDemoScene() {
     sceneGraph[ball].body.type = BODY_DYNAMIC;
     sceneGraph[ball].body.restitution = 0.7f;
     sceneGraph[ball].gpuData.color.w = 0.2f;
+    sceneGraph[ball].audio.enabled = true;
+    sceneGraph[ball].audio.clip = "assets/sounds/hit.wav";
+    sceneGraph[ball].audio.playOnStart = false;
     attach(ball, "ball.nls");
 
     int capsule = add("Barrel", SDF_CYLINDER, {1.5f, 2.0f, -2.5f}, {0.4f, 0.55f, 0.4f}, {0.2f, 0.5f, 0.8f});
@@ -133,5 +160,5 @@ void loadDemoScene() {
     cam.radius = 8.0f;
     cam.phi = 1.25f;
     currentLoadedFile = "Untitled";
-    showToast("Demo scene loaded: press F5 to play");
+    showToast("Demo scene loaded: press F5 to play (WASD, mouse, Space, E)");
 }

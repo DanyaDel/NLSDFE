@@ -112,3 +112,44 @@ void runSceneTests() {
     std::filesystem::remove(path);
     resetScene();
 }
+
+#include "UvTools.h"
+
+void runUvTests() {
+    TEST_SECTION("uv: projections and obj round trip");
+    // Квадрат из двух треугольников в плоскости XY
+    std::vector<Vertex> quad(6);
+    vec3 points[6] = { {0,0,0}, {2,0,0}, {2,1,0}, {0,0,0}, {2,1,0}, {0,1,0} };
+    for (int i = 0; i < 6; i++) { quad[i].pos = points[i]; quad[i].normal = {0, 0, 1}; quad[i].color = vec4(1); }
+
+    uvProject(quad, UV_PLANAR_Z);
+    CHECK_NEAR(quad[2].uv.x, 1.0, 1e-5);
+    CHECK_NEAR(quad[2].uv.y, 1.0, 1e-5);
+    CHECK_NEAR(quad[0].uv.x, 0.0, 1e-5);
+
+    uvTransform(quad, vec2(0.0f), vec2(0.5f), 0.0f);          // Сжатие вокруг центра
+    CHECK_NEAR(quad[2].uv.x, 0.75, 1e-5);
+    CHECK_NEAR(quad[0].uv.y, 0.25, 1e-5);
+    uvTransform(quad, vec2(0.0f), vec2(1.0f), 90.0f);
+    CHECK_NEAR(quad[2].uv.x, 0.25, 1e-5);                     // (0.75, 0.75) повернулась в (0.25, 0.75)
+    CHECK_NEAR(quad[2].uv.y, 0.75, 1e-5);
+    uvFit(quad);
+    float lo = 1.0f, hi = 0.0f;
+    for (const auto& v : quad) { lo = std::min(lo, std::min(v.uv.x, v.uv.y)); hi = std::max(hi, std::max(v.uv.x, v.uv.y)); }
+    CHECK_NEAR(lo, 0.0, 1e-5);
+    CHECK_NEAR(hi, 1.0, 1e-5);
+
+    uvProject(quad, UV_BOX);
+    for (const auto& v : quad) CHECK(v.uv.x >= 2.0f / 3.0f - 1e-5f && v.uv.x <= 1.0f + 1e-5f);   // Грань смотрит вдоль Z — третья полоса
+
+    std::string path = (std::filesystem::temp_directory_path() / "nlsdfe_test_uv.obj").string();
+    CHECK(writeOBJ(path, quad));
+    OBJModel loaded = parseOBJ(path);
+    CHECK(loaded.vertices.size() == quad.size());
+    if (loaded.vertices.size() == quad.size()) {
+        CHECK_NEAR(loaded.vertices[2].pos.x, 2.0, 1e-5);
+        CHECK_NEAR(loaded.vertices[2].uv.x, quad[2].uv.x, 1e-5);
+        CHECK_NEAR(loaded.vertices[4].normal.z, 1.0, 1e-5);
+    }
+    std::filesystem::remove(path);
+}

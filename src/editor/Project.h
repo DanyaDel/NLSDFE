@@ -25,13 +25,14 @@ void saveProject();
 // Копирует внешний файл в папку проекта; возвращает путь внутри проекта или "" при ошибке
 std::string importIntoProject(const std::string& file, const std::string& subdir);
 
-// Рабочие пространства идут по ходу работы: принести материал -> сделать -> собрать игру
-enum Workspace { WS_IMPORT = 0, WS_MODEL, WS_SCENE, WS_SCRIPT, WS_EXPORT, WS_COUNT };
+// Режимы редактора (панель под главным меню)
+enum Workspace { WS_MODEL = 0, WS_SCENE, WS_UV, WS_SCRIPT, WS_COUNT };
 extern Workspace currentWorkspace;
 const char* workspaceName(Workspace ws);
+inline bool workspaceHasViewport(Workspace ws) { return ws != WS_SCRIPT; }
 
 // У моделлера и сцены свои документы; при смене вкладки нужный подставляется в sceneGraph.
-// Все вкладки, кроме Model, работают со сценой.
+// Все режимы, кроме Model Editor, работают со сценой.
 void switchWorkspace(Workspace ws);
 void newDocument();                // Чистый документ текущего вида: модель или сцена
 bool editingModel();

@@ -22,5 +22,5 @@ void main() {
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
     fragNormal = vec3(dot(pc.normalRow0.xyz, inNormal), dot(pc.normalRow1.xyz, inNormal), dot(pc.normalRow2.xyz, inNormal));
     fragTexCoord = inTexCoord;
-    fragColor = inColor * pc.color;
+    fragColor = vec4(inColor.rgb * pc.color.rgb, 1.0);
 }

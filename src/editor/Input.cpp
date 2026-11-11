@@ -341,7 +341,7 @@ void processInput(GLFWwindow* window, float deltaTime) {
     }
     if (io.WantCaptureKeyboard || io.WantTextInput) return;
     // Горячие клавиши редактирования действуют только там, где есть 3D-вид
-    if (currentWorkspace != WS_MODEL && currentWorkspace != WS_SCENE) return;
+    if (!workspaceHasViewport(currentWorkspace)) return;
 
     bool ctrl = io.KeyCtrl, shift = io.KeyShift, alt = io.KeyAlt;
 

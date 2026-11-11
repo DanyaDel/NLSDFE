@@ -25,7 +25,8 @@ static bool pendingDelete = false;
 
 const char* NOS_FILTER = "NOS Scene File (*.nos)\0*.nos\0All Files (*.*)\0*.*\0";
 const char* OBJ_FILTER = "OBJ Model (*.obj)\0*.obj\0All Files (*.*)\0*.*\0";
-const char* IMPORT_FILTER = "Models, scenes, scripts (*.obj *.nos *.nls)\0*.obj;*.nos;*.nls\0All Files (*.*)\0*.*\0";
+const char* SCRIPT_FILTER = "NLS Script (*.nls)\0*.nls\0All Files (*.*)\0*.*\0";
+const char* SOUND_FILTER = "Sound (*.wav *.mp3 *.flac)\0*.wav;*.mp3;*.flac\0All Files (*.*)\0*.*\0";
 
 static const ImGuiWindowFlags PANEL_FLAGS = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
@@ -44,6 +45,7 @@ void addMenuItems(GLFWwindow* window) {
         if (ImGui::MenuItem(shapeName(t))) createNode(t, shapeName(t));
     }
     ImGui::Separator();
+    if (ImGui::MenuItem("Camera")) createNode(NODE_CAMERA, "Camera");
     if (ImGui::MenuItem("Point Light")) createNode(NODE_LIGHT, "Light");
     if (ImGui::MenuItem("Empty")) createNode(NODE_EMPTY, "Empty");
     if (ImGui::MenuItem("Trigger Zone")) {
@@ -170,6 +172,17 @@ void drawViewportOverlays() {
                 float a = k * 0.7853982f;
                 dl->AddLine(ImVec2(s.x + std::cos(a) * 8.0f, s.y + std::sin(a) * 8.0f), ImVec2(s.x + std::cos(a) * 13.0f, s.y + std::sin(a) * 13.0f), col, 1.5f);
             }
+        } else if (type == NODE_CAMERA) {
+            // Пирамида обзора: куда и под каким углом смотрит камера
+            mat3 rot = glm::transpose(mat3(node.gpuData.invRotation));
+            vec3 pos = vec3(node.gpuData.position);
+            float h = std::tan(glm::radians(node.cameraFov) * 0.5f) * 0.8f, w = h * 16.0f / 9.0f;
+            vec3 corners[4];
+            for (int k = 0; k < 4; k++) corners[k] = pos + rot * vec3((k & 1) ? w : -w, (k & 2) ? h : -h, -0.8f);
+            const ImU32 col = IM_COL32(120, 200, 255, 230);
+            for (int k = 0; k < 4; k++) drawSegment(dl, pos, corners[k], col, 1.5f);
+            drawSegment(dl, corners[0], corners[1], col, 1.5f); drawSegment(dl, corners[1], corners[3], col, 1.5f);
+            drawSegment(dl, corners[3], corners[2], col, 1.5f); drawSegment(dl, corners[2], corners[0], col, 1.5f);
         } else if (type == NODE_EMPTY && node.meshIdx < 0 && projectWorldToScreen(vec3(node.gpuData.position), s)) {
             dl->AddLine(ImVec2(s.x - 6, s.y), ImVec2(s.x + 6, s.y), IM_COL32(200, 200, 200, 200), 1.5f);
             dl->AddLine(ImVec2(s.x, s.y - 6), ImVec2(s.x, s.y + 6), IM_COL32(200, 200, 200, 200), 1.5f);
@@ -316,7 +329,7 @@ void drawAssetBrowser(float x, float y, float w, float h) {
 // =================================================================
 static void undoOnEdit() { if (ImGui::IsItemActivated()) saveUndo(); }
 
-static void renderScriptSection(SceneNode& node, int nodeIdx);
+static void renderComponents(SceneNode& node, int nodeIdx);
 
 static void renderInspector(bool gameplay) {
     if (selectedIndices.empty()) { ImGui::TextDisabled("Select an object in hierarchy"); return; }
@@ -407,73 +420,30 @@ static void renderInspector(bool gameplay) {
         for (int k = 0; k < 3; k++) if (std::abs(node.localScale[k]) < 0.001f) node.localScale[k] = 0.001f;
     }
 
-    if (gameplay && isSdf && !node.isTrigger && ImGui::CollapsingHeader("Rigid Body", ImGuiTreeNodeFlags_DefaultOpen)) {
-        const char* bodyTypes[] = { "Static (world geometry)", "Dynamic" };
-        int bodyType = node.body.type;
-        if (ImGui::Combo("Body", &bodyType, bodyTypes, BODY_TYPE_COUNT)) { saveUndo(); node.body.type = bodyType; }
-        if (node.body.type == BODY_DYNAMIC) {
-            ImGui::DragFloat("Mass", &node.body.mass, 0.05f, 0.01f, 1000.0f, "%.2f kg"); undoOnEdit();
-            ImGui::SliderFloat("Bounciness", &node.body.restitution, 0.0f, 1.0f); undoOnEdit();
-            ImGui::SliderFloat("Friction", &node.body.friction, 0.0f, 1.5f); undoOnEdit();
-            ImGui::DragFloat("Linear damping", &node.body.linearDamping, 0.01f, 0.0f, 10.0f); undoOnEdit();
-            ImGui::DragFloat("Angular damping", &node.body.angularDamping, 0.01f, 0.0f, 10.0f); undoOnEdit();
-            ImGui::DragFloat("Gravity scale", &node.body.gravityScale, 0.05f, -5.0f, 5.0f); undoOnEdit();
-            ImGui::TextDisabled("Collider: this node's shape. Simulated in Play Mode.");
-        }
+    if (type == NODE_CAMERA && ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("Field of view", &node.cameraFov, 20.0f, 120.0f, "%.0f deg"); undoOnEdit();
+        ImGui::TextDisabled("Play Mode looks through the first active camera.");
     }
 
-    if (gameplay) renderScriptSection(node, activeIdx);
-
-    if (gameplay && ImGui::CollapsingHeader("Logic (Play Mode)")) {
-        const char* behaviors[] = { "None", "Rotate", "Ping-Pong" };
-        int behavior = node.behavior;
-        if (ImGui::Combo("Behavior", &behavior, behaviors, BEHAVIOR_COUNT)) { saveUndo(); node.behavior = behavior; }
-        if (node.behavior != BEHAVIOR_NONE) {
-            ImGui::DragFloat3(node.behavior == BEHAVIOR_ROTATE ? "Axis speed" : "Offset", &node.behaviorVec.x, 0.05f); undoOnEdit();
-            ImGui::DragFloat("Speed", &node.behaviorSpeed, 0.05f); undoOnEdit();
-            bool on = node.behaviorOn;
-            if (ImGui::Checkbox("Running at start", &on)) { saveUndo(); node.behaviorOn = on; }
-        }
-        if (isSdf) {
-            bool trigger = node.isTrigger;
-            if (ImGui::Checkbox("Trigger zone (invisible box)", &trigger)) { saveUndo(); node.isTrigger = trigger; }
-        }
-        if (node.isTrigger) {
-            int target = node.triggerTarget;
-            const char* preview = (target >= 0 && target < (int)sceneGraph.size()) ? sceneGraph[target].name.c_str() : "(none)";
-            if (ImGui::BeginCombo("Target", preview)) {
-                if (ImGui::Selectable("(none)", target == -1)) { saveUndo(); node.triggerTarget = -1; }
-                for (int i = 0; i < (int)sceneGraph.size(); i++) {
-                    if (i == activeIdx) continue;
-                    ImGui::PushID(i);
-                    if (ImGui::Selectable(sceneGraph[i].name.c_str(), target == i)) { saveUndo(); node.triggerTarget = i; }
-                    ImGui::PopID();
-                }
-                ImGui::EndCombo();
-            }
-            const char* actions[] = { "Toggle visibility", "Start behavior", "Stop behavior", "Toggle behavior" };
-            int action = node.triggerAction;
-            if (ImGui::Combo("On enter", &action, actions, TRIGGER_ACTION_COUNT)) { saveUndo(); node.triggerAction = action; }
-        }
-    }
+    if (gameplay) renderComponents(node, activeIdx);
 }
 
+// =================================================================
+// --- Компоненты: всё, что делает из формы игровой объект ---
+// =================================================================
 
-// Скрипт узла: выбор файла и значения его переменных
-static void renderScriptSection(SceneNode& node, int nodeIdx) {
-    if (!ImGui::CollapsingHeader("Script", ImGuiTreeNodeFlags_DefaultOpen)) return;
+// Заголовок компонента с кнопкой удаления; false — блок свёрнут
+static bool componentHeader(const char* title, bool* removed) {
+    ImGui::PushID(title);
+    bool open = ImGui::CollapsingHeader(title, ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowItemOverlap);
+    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - 22.0f);
+    if (ImGui::SmallButton("x")) *removed = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove component");
+    ImGui::PopID();
+    return open;
+}
 
-    const char* preview = node.script.path.empty() ? "(none)" : node.script.path.c_str();
-    if (ImGui::BeginCombo("File", preview)) {
-        if (ImGui::Selectable("(none)", node.script.path.empty())) { saveUndo(); node.script.path.clear(); node.script.vars.clear(); }
-        for (const std::string& file : project.list("scripts", ".nls")) {
-            std::string rel = "scripts/" + file;
-            if (ImGui::Selectable(file.c_str(), rel == node.script.path)) { saveUndo(); node.script.path = rel; node.script.vars.clear(); }
-        }
-        ImGui::EndCombo();
-    }
-    if (node.script.path.empty()) { ImGui::TextDisabled("Create scripts in the Script workspace"); return; }
-
+static void scriptVariables(SceneNode& node) {
     // Список переменных следует за текстом скрипта (компиляция кэшируется по времени файла)
     std::vector<nls::CompileError> errors;
     nls::registerEngineBindings();
@@ -511,8 +481,155 @@ static void renderScriptSection(SceneNode& node, int nodeIdx) {
         }
         ImGui::PopID();
     }
-    if (ImGui::Button("Edit script")) openScriptInEditor(node.script.path);
-    (void)nodeIdx;
+}
+
+static void renderComponents(SceneNode& node, int nodeIdx) {
+    bool isSdf = isSdfNode(node);
+    bool removed = false;
+
+    // --- Collider ---
+    bool hasCollider = node.collider.shape != COLLIDER_NONE && (isSdf || node.collider.shape != COLLIDER_SHAPE);
+    if (hasCollider || node.isTrigger) {
+        if (componentHeader("Collider", &removed)) {
+            const char* shapes[] = { "Own shape (exact)", "Box", "Sphere", "Capsule" };
+            int shape = std::clamp(node.collider.shape, 0, 3);
+            if (ImGui::BeginCombo("Shape", shapes[shape])) {
+                for (int s = isSdf ? 0 : 1; s < 4; s++) {
+                    if (ImGui::Selectable(shapes[s], s == shape)) { saveUndo(); node.collider.shape = s; }
+                }
+                ImGui::EndCombo();
+            }
+            if (node.collider.shape != COLLIDER_SHAPE) { ImGui::DragFloat3("Size", &node.collider.size.x, 0.02f, 0.05f, 20.0f); undoOnEdit(); }
+            bool trigger = node.isTrigger;
+            if (ImGui::Checkbox("Is trigger (pass through, fire events)", &trigger)) { saveUndo(); node.isTrigger = trigger; }
+            if (node.isTrigger) {
+                int target = node.triggerTarget;
+                const char* preview = (target >= 0 && target < (int)sceneGraph.size()) ? sceneGraph[target].name.c_str() : "(none)";
+                if (ImGui::BeginCombo("Target", preview)) {
+                    if (ImGui::Selectable("(none)", target == -1)) { saveUndo(); node.triggerTarget = -1; }
+                    for (int i = 0; i < (int)sceneGraph.size(); i++) {
+                        if (i == nodeIdx) continue;
+                        ImGui::PushID(i);
+                        if (ImGui::Selectable(sceneGraph[i].name.c_str(), target == i)) { saveUndo(); node.triggerTarget = i; }
+                        ImGui::PopID();
+                    }
+                    ImGui::EndCombo();
+                }
+                const char* actions[] = { "Toggle visibility", "Start behavior", "Stop behavior", "Toggle behavior" };
+                int action = node.triggerAction;
+                if (ImGui::Combo("On enter", &action, actions, TRIGGER_ACTION_COUNT)) { saveUndo(); node.triggerAction = action; }
+                ImGui::TextDisabled("Scripts get triggerEnter / triggerExit.");
+            }
+        }
+        if (removed) { saveUndo(); node.collider.shape = COLLIDER_NONE; node.isTrigger = false; removed = false; }
+    }
+
+    // --- Rigid Body ---
+    if (node.body.type == BODY_DYNAMIC) {
+        if (componentHeader("Rigid Body", &removed)) {
+            ImGui::DragFloat("Mass", &node.body.mass, 0.05f, 0.01f, 1000.0f, "%.2f kg"); undoOnEdit();
+            ImGui::SliderFloat("Bounciness", &node.body.restitution, 0.0f, 1.0f); undoOnEdit();
+            ImGui::SliderFloat("Friction", &node.body.friction, 0.0f, 1.5f); undoOnEdit();
+            ImGui::DragFloat("Linear damping", &node.body.linearDamping, 0.01f, 0.0f, 10.0f); undoOnEdit();
+            ImGui::DragFloat("Angular damping", &node.body.angularDamping, 0.01f, 0.0f, 10.0f); undoOnEdit();
+            ImGui::DragFloat("Gravity scale", &node.body.gravityScale, 0.05f, -5.0f, 5.0f); undoOnEdit();
+            if (!hasCollider) ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "Needs a Collider to be simulated");
+        }
+        if (removed) { saveUndo(); node.body.type = BODY_STATIC; removed = false; }
+    }
+
+    // --- Character Controller ---
+    if (node.controller.enabled) {
+        if (componentHeader("Character Controller", &removed)) {
+            CharacterController& c = node.controller;
+            ImGui::DragFloat("Walk speed", &c.walkSpeed, 0.1f, 0.0f, 50.0f); undoOnEdit();
+            ImGui::DragFloat("Run speed", &c.runSpeed, 0.1f, 0.0f, 50.0f); undoOnEdit();
+            ImGui::DragFloat("Jump speed", &c.jumpSpeed, 0.1f, 0.0f, 50.0f); undoOnEdit();
+            ImGui::DragFloat("Radius", &c.radius, 0.01f, 0.05f, 5.0f); undoOnEdit();
+            ImGui::DragFloat("Height", &c.height, 0.01f, 0.1f, 10.0f); undoOnEdit();
+            bool look = c.mouseLook;
+            if (ImGui::Checkbox("Mouse look", &look)) { saveUndo(); c.mouseLook = look; }
+            ImGui::TextDisabled("WASD, Shift, Space. Put a Camera inside for a first-person view.");
+        }
+        if (removed) { saveUndo(); node.controller.enabled = false; removed = false; }
+    }
+
+    // --- Audio Source ---
+    if (node.audio.enabled) {
+        if (componentHeader("Audio Source", &removed)) {
+            AudioSource& a = node.audio;
+            const char* preview = a.clip.empty() ? "(none)" : a.clip.c_str();
+            if (ImGui::BeginCombo("Clip", preview)) {
+                for (const char* ext : { ".wav", ".mp3", ".flac" }) {
+                    for (const std::string& file : project.list("assets/sounds", ext)) {
+                        std::string rel = "assets/sounds/" + file;
+                        if (ImGui::Selectable(file.c_str(), rel == a.clip)) { saveUndo(); a.clip = rel; }
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            if (a.clip.empty()) ImGui::TextDisabled("File > Import > Sound adds clips to the project");
+            ImGui::SliderFloat("Volume", &a.volume, 0.0f, 2.0f); undoOnEdit();
+            bool loop = a.loop, onStart = a.playOnStart, spatial = a.spatial;
+            if (ImGui::Checkbox("Loop", &loop)) { saveUndo(); a.loop = loop; }
+            if (ImGui::Checkbox("Play on start", &onStart)) { saveUndo(); a.playOnStart = onStart; }
+            if (ImGui::Checkbox("3D sound", &spatial)) { saveUndo(); a.spatial = spatial; }
+            if (a.spatial) { ImGui::DragFloat("Range", &a.range, 0.1f, 1.0f, 200.0f); undoOnEdit(); }
+        }
+        if (removed) { saveUndo(); node.audio.enabled = false; removed = false; }
+    }
+
+    // --- Script ---
+    if (!node.script.path.empty()) {
+        if (componentHeader("Script", &removed)) {
+            ImGui::TextUnformatted(node.script.path.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Edit")) openScriptInEditor(node.script.path);
+            scriptVariables(node);
+        }
+        if (removed) { saveUndo(); node.script.path.clear(); node.script.vars.clear(); removed = false; }
+    }
+
+    // --- Behavior ---
+    if (node.behavior != BEHAVIOR_NONE) {
+        if (componentHeader("Behavior", &removed)) {
+            const char* behaviors[] = { "None", "Rotate", "Ping-Pong" };
+            int behavior = node.behavior;
+            if (ImGui::Combo("Type", &behavior, behaviors, BEHAVIOR_COUNT)) { saveUndo(); node.behavior = behavior; }
+            ImGui::DragFloat3(node.behavior == BEHAVIOR_ROTATE ? "Axis speed" : "Offset", &node.behaviorVec.x, 0.05f); undoOnEdit();
+            ImGui::DragFloat("Speed", &node.behaviorSpeed, 0.05f); undoOnEdit();
+            bool on = node.behaviorOn;
+            if (ImGui::Checkbox("Running at start", &on)) { saveUndo(); node.behaviorOn = on; }
+        }
+        if (removed) { saveUndo(); node.behavior = BEHAVIOR_NONE; removed = false; }
+    }
+
+    // --- Add Component ---
+    ImGui::Spacing();
+    float width = ImGui::GetContentRegionAvail().x;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + width * 0.15f);
+    if (ImGui::Button("Add Component", ImVec2(width * 0.7f, 28))) ImGui::OpenPopup("AddComponent");
+    if (ImGui::BeginPopup("AddComponent")) {
+        if (ImGui::MenuItem("Collider", nullptr, false, !hasCollider)) { saveUndo(); node.collider.shape = isSdf ? COLLIDER_SHAPE : COLLIDER_BOX; }
+        if (ImGui::MenuItem("Trigger Zone", nullptr, false, !node.isTrigger)) { saveUndo(); node.isTrigger = true; if (node.collider.shape == COLLIDER_NONE) node.collider.shape = isSdf ? COLLIDER_SHAPE : COLLIDER_BOX; }
+        if (ImGui::MenuItem("Rigid Body", nullptr, false, node.body.type != BODY_DYNAMIC)) {
+            saveUndo();
+            node.body.type = BODY_DYNAMIC;
+            if (!hasCollider) node.collider.shape = isSdf ? COLLIDER_SHAPE : COLLIDER_BOX;   // Без коллайдера тело не симулируется
+        }
+        if (ImGui::MenuItem("Character Controller", nullptr, false, !node.controller.enabled)) { saveUndo(); node.controller.enabled = true; }
+        if (ImGui::MenuItem("Audio Source", nullptr, false, !node.audio.enabled)) { saveUndo(); node.audio.enabled = true; }
+        if (ImGui::MenuItem("Behavior", nullptr, false, node.behavior == BEHAVIOR_NONE)) { saveUndo(); node.behavior = BEHAVIOR_ROTATE; }
+        if (ImGui::BeginMenu("Script", node.script.path.empty())) {
+            std::vector<std::string> files = project.list("scripts", ".nls");
+            if (files.empty()) ImGui::TextDisabled("No scripts yet: create one in the Script editor");
+            for (const std::string& file : files) {
+                if (ImGui::MenuItem(file.c_str())) { saveUndo(); node.script.path = "scripts/" + file; node.script.vars.clear(); }
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 // =================================================================
@@ -535,7 +652,6 @@ void drawToolbar(float x, float y, float w, float h) {
         if (toolButton("Scl", currentMode == MODE_SCALE, "Scale (3)")) currentMode = MODE_SCALE;
         ImGui::Separator();
         if (toolButton("Giz", showGizmos, "Show gizmos")) showGizmos = !showGizmos;
-        if (toolButton("Snp", editorCfg.snap, "Snap to grid (hold Ctrl to invert)")) { editorCfg.snap = !editorCfg.snap; saveSettings(settingsPath()); }
         if (toolButton("Grd", editorCfg.showGrid, "Floor grid (G)")) { editorCfg.showGrid = !editorCfg.showGrid; saveSettings(settingsPath()); }
     }
     ImGui::End();

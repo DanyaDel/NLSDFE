@@ -108,7 +108,7 @@ target_include_directories(nls_core PUBLIC src/core ${vma_SOURCE_DIR}/include $<
 target_link_libraries(nls_core PUBLIC glm::glm spdlog::spdlog ${NLS_VULKAN_HEADERS})
 
 # scene: граф сцены, SDF на CPU, файлы .nos, камера
-add_library(nls_scene STATIC src/scene/Scene.cpp src/scene/Globals.cpp src/scene/Camera.cpp)
+add_library(nls_scene STATIC src/scene/Scene.cpp src/scene/Globals.cpp src/scene/Camera.cpp src/scene/UvTools.cpp)
 target_include_directories(nls_scene PUBLIC src/scene)
 target_link_libraries(nls_scene PUBLIC nls_core)
 
@@ -153,11 +153,11 @@ add_executable(SDF_Engine
     src/editor/Panels.cpp
     src/editor/Project.cpp
     src/editor/Demo.cpp
-    src/editor/workspaces/ImportWorkspace.cpp
+    src/editor/ExportWindow.cpp
     src/editor/workspaces/ModelWorkspace.cpp
     src/editor/workspaces/SceneWorkspace.cpp
+    src/editor/workspaces/UvWorkspace.cpp
     src/editor/workspaces/ScriptWorkspace.cpp
-    src/editor/workspaces/ExportWorkspace.cpp
     src/editor/EngineBridge.cpp
     src/editor/Input.cpp
     src/editor/FileDialogs.cpp

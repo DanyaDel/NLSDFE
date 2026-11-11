@@ -1012,7 +1012,7 @@ void Renderer::recordCommandBuffer(VkCommandBuffer cb, uint32_t imageIndex, cons
                 mp.normalRow0 = vec4(normalMat[0][0], normalMat[1][0], normalMat[2][0], sun.x);
                 mp.normalRow1 = vec4(normalMat[0][1], normalMat[1][1], normalMat[2][1], sun.y);
                 mp.normalRow2 = vec4(normalMat[0][2], normalMat[1][2], normalMat[2][2], sun.z);
-                mp.color = node.gpuData.color;
+                mp.color = vec4(vec3(node.gpuData.color), mesh.showChecker ? 1.0f : 0.0f);   // w: рисовать шахматку по UV
                 vkCmdPushConstants(cb, meshLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(MeshPush), &mp);
                 VkDeviceSize offsets[] = {0};
                 vkCmdBindVertexBuffers(cb, 0, 1, &mesh.vertexBuffer.buffer, offsets);
@@ -1095,8 +1095,19 @@ bool Renderer::uploadMesh(const OBJModel& model, MeshData& out) {
 
     out.boundsMin = vec3(1e10f); out.boundsMax = vec3(-1e10f);
     for (const auto& v : model.vertices) { out.boundsMin = glm::min(out.boundsMin, v.pos); out.boundsMax = glm::max(out.boundsMax, v.pos); }
+    out.vertices = model.vertices;
     out.isLoaded = true;
     return true;
+}
+
+void Renderer::updateMeshVertices(MeshData& mesh) {
+    if (!mesh.isLoaded || mesh.vertices.size() != mesh.vertexBuffer.count) return;
+    vkDeviceWaitIdle(device);   // Буфер может читать кадр, который ещё в работе
+    void* data;
+    vmaMapMemory(allocator, mesh.vertexBuffer.allocation, &data);
+    memcpy(data, mesh.vertices.data(), mesh.vertices.size() * sizeof(Vertex));
+    vmaFlushAllocation(allocator, mesh.vertexBuffer.allocation, 0, VK_WHOLE_SIZE);
+    vmaUnmapMemory(allocator, mesh.vertexBuffer.allocation);
 }
 
 std::vector<uint8_t> Renderer::captureScreenshot(int& outW, int& outH) {
