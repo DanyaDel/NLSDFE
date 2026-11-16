@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <cctype>
 #include <filesystem>
 
 static bool showAboutWindow = false;
@@ -206,6 +207,7 @@ static void renderSettingsWindow() {
                 changed |= ImGui::DragFloat("Rotation snap", &editorCfg.snapAngleDeg, 1.0f, 1.0f, 90.0f, "%.0f deg");
                 changed |= ImGui::SliderFloat("Camera FOV", &editorCfg.fovDeg, 20.0f, 110.0f, "%.0f deg");
                 changed |= ImGui::Checkbox("Show stats overlay", &editorCfg.showStats);
+                changed |= ImGui::SliderFloat("Interface scale (restart)", &editorCfg.uiScale, 0.75f, 2.5f, "%.2f");
                 char blenderBuf[512];
                 strncpy(blenderBuf, editorCfg.blenderPath.c_str(), sizeof(blenderBuf)); blenderBuf[sizeof(blenderBuf) - 1] = 0;
                 if (ImGui::InputText("Blender executable", blenderBuf, sizeof(blenderBuf))) { editorCfg.blenderPath = blenderBuf; changed = true; }
@@ -271,7 +273,7 @@ void beginUIFrame() {
     setupImGuiStyle();
 }
 
-bool uiNeedsAnimation() { return toast.active; }
+bool uiNeedsAnimation() { return toast.active || editorPreviewActive(); }
 
 // --- File > Import: внешний файл копируется в проект и сразу идёт в дело ---
 static void importMesh(GLFWwindow* window) {
@@ -407,6 +409,34 @@ static float drawMainMenu(GLFWwindow* window, bool editing) {
 }
 
 // Вторая строка: режимы редактора и меню текущего вида
+// Object > Save as Prefab: выделенный узел с потомками уходит в assets/prefabs/<имя>.nos
+static void saveSelectionAsPrefab() {
+    if (selectedIndices.size() != 1 || selectedIndices[0] >= (int)sceneGraph.size()) return;
+    std::vector<SceneNode> nodes = copySubtree(selectedIndices[0]);
+    // Корень префаба встаёт в начало координат; ссылки на узлы вне префаба в файл не попадают
+    nodes[0].localPosition = vec3(0.0f);
+    for (auto& n : nodes) {
+        if (n.triggerTarget < -1) n.triggerTarget = -1;
+        for (auto& v : n.script.vars) if (v.node < -1) v.node = -1;
+    }
+    std::string name = nodes[0].name.empty() ? "prefab" : nodes[0].name;
+    for (char& c : name) if (!std::isalnum((unsigned char)c) && c != '_' && c != '-') c = '_';
+    std::error_code ec;
+    std::filesystem::create_directories(project.path("assets/prefabs"), ec);
+    std::string file = project.path("assets/prefabs/" + name + ".nos");
+
+    // saveScene пишет текущую сцену — на время записи подставляем префаб
+    std::vector<SceneNode> keep = std::move(sceneGraph);
+    std::string keepFile = currentLoadedFile;
+    sceneGraph = nodes;
+    for (int i = 0; i < (int)sceneGraph.size(); i++) if (sceneGraph[i].parent >= 0) sceneGraph[sceneGraph[i].parent].children.push_back(i);
+    bool ok = saveScene(file, {});
+    sceneGraph = std::move(keep);
+    currentLoadedFile = keepFile;
+    rescanAssets();
+    showToast(ok ? "Prefab saved: " + name + "  (scene.instantiate(\"" + name + "\", position))" : "Cannot write " + file);
+}
+
 static float drawHeaderBar(GLFWwindow* window, float y, bool editing) {
     ImGuiIO& io = ImGui::GetIO();
     const ImVec4 accent(0.28f, 0.56f, 0.90f, 1.0f);
@@ -449,6 +479,9 @@ static float drawHeaderBar(GLFWwindow* window, float y, bool editing) {
                 ImGui::Separator();
                 if (ImGui::MenuItem("Convert to Mesh...", nullptr, false, canConvert(CONVERT_TO_MESH))) requestConversion(CONVERT_TO_MESH);
                 if (ImGui::MenuItem("Convert to SDF Volume...", nullptr, false, canConvert(CONVERT_TO_VOLUME))) requestConversion(CONVERT_TO_VOLUME);
+                ImGui::Separator();
+                if (ImGui::MenuItem("Save as Prefab", nullptr, false, selectedIndices.size() == 1)) saveSelectionAsPrefab();
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Writes the object with its children and components to assets/prefabs/.\nScripts create copies with scene.instantiate(\"name\", position)");
                 ImGui::Separator();
                 if (ImGui::MenuItem("Hide / Show", "H", false, !selectedIndices.empty())) {
                     saveUndo();
@@ -527,6 +560,7 @@ void renderUI(GLFWwindow* window) {
         case WS_SCENE: drawSceneWorkspace(window, area); break;
         case WS_UV: drawUvWorkspace(window, area); break;
         case WS_SCRIPT: drawScriptWorkspace(window, area); break;
+        case WS_UI: drawUiWorkspace(window, area); break;
         default: break;
     }
     drawToast();
@@ -541,7 +575,8 @@ void renderUI(GLFWwindow* window) {
 }
 
 void setupImGuiStyle() {
-    ImGuiStyle& style = ImGui::GetStyle();
+    // Стиль собирается заново каждый кадр и масштабируется целиком — иначе масштаб накапливался бы
+    ImGuiStyle style;
     style.WindowRounding    = 0.0f;
     style.FrameRounding     = 3.0f;
     style.WindowPadding     = ImVec2(10, 10);
@@ -561,5 +596,7 @@ void setupImGuiStyle() {
     colors[ImGuiCol_Text]           = textWhite;
     colors[ImGuiCol_TextSelectedBg] = accentBlue;
     colors[ImGuiCol_MenuBarBg]      = ImVec4(0.05f, 0.05f, 0.05f, 1.0f);
+    style.ScaleAllSizes(editorCfg.uiScale);
+    ImGui::GetStyle() = style;
 }
 

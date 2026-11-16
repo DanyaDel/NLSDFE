@@ -101,40 +101,58 @@ vec2 opSmoothIntersect(vec2 d1, vec2 d2, float k) {
 
 // Какие объекты луч вообще может задеть и на каком отрезке.
 // Строится один раз на луч, дальше mapScene обходит только эти объекты.
+//
+// Сама маска (бит на объект) лежит в gMask: 16 слов по 32 бита = 512 объектов, MAX_OBJECTS в Common.h.
+// Одновременно живут две маски — луча камеры и теневого луча, отсюда два слота.
+// RayMask.words — по биту на непустое слово: в маленькой сцене и при редких попаданиях
+// обход касается одного-двух слов, а не всех шестнадцати.
+const int MASK_WORDS = 16;
+const int MASK_VIEW = 0;
+const int MASK_SHADOW = MASK_WORDS;
+uint gMask[2 * MASK_WORDS];
+
 struct RayMask {
-    uvec4 bits;
+    uint words;
     float tNear;
     float tFar;
 };
 
-RayMask buildMask(vec3 ro, vec3 rd, float tMax, float pad) {
+RayMask buildMask(vec3 ro, vec3 rd, float tMax, float pad, int slot) {
     RayMask m;
-    m.bits = uvec4(0u);
+    m.words = 0u;
     m.tNear = tMax;
     m.tFar = 0.0;
-    for (int i = 0; i < u.counts.x; i++) {
-        mat3 rot = mat3(scene.objects[i].rot0.xyz, scene.objects[i].rot1.xyz, scene.objects[i].rot2.xyz);
-        vec3 lro = rot * (ro - scene.objects[i].pos.xyz);
-        vec3 lrd = rot * rd;
-        lrd = mix(lrd, vec3(1e-6), lessThan(abs(lrd), vec3(1e-6)));
-        vec3 b = scene.objects[i].bound.xyz + pad;
-        vec3 inv = 1.0 / lrd;
-        vec3 t0 = (-b - lro) * inv;
-        vec3 t1 = (b - lro) * inv;
-        vec3 tLo = min(t0, t1);
-        vec3 tHi = max(t0, t1);
-        float tn = max(max(tLo.x, tLo.y), tLo.z);
-        float tf = min(min(tHi.x, tHi.y), tHi.z);
-        if (tf >= max(tn, 0.0) && tn < tMax) {
-            m.bits[i >> 5] |= 1u << uint(i & 31);
-            m.tNear = min(m.tNear, max(tn, 0.0));
-            m.tFar = max(m.tFar, min(tf, tMax));
+    int count = min(u.counts.x, MASK_WORDS * 32);
+    // Слова за пределами числа объектов не пишутся и не читаются: их биты в words всегда нулевые
+    for (int w = 0; (w << 5) < count; w++) {
+        uint bits = 0u;
+        int last = min(count, (w + 1) << 5);
+        for (int i = w << 5; i < last; i++) {
+            mat3 rot = mat3(scene.objects[i].rot0.xyz, scene.objects[i].rot1.xyz, scene.objects[i].rot2.xyz);
+            vec3 lro = rot * (ro - scene.objects[i].pos.xyz);
+            vec3 lrd = rot * rd;
+            lrd = mix(lrd, vec3(1e-6), lessThan(abs(lrd), vec3(1e-6)));
+            vec3 b = scene.objects[i].bound.xyz + pad;
+            vec3 inv = 1.0 / lrd;
+            vec3 t0 = (-b - lro) * inv;
+            vec3 t1 = (b - lro) * inv;
+            vec3 tLo = min(t0, t1);
+            vec3 tHi = max(t0, t1);
+            float tn = max(max(tLo.x, tLo.y), tLo.z);
+            float tf = min(min(tHi.x, tHi.y), tHi.z);
+            if (tf >= max(tn, 0.0) && tn < tMax) {
+                bits |= 1u << uint(i & 31);
+                m.tNear = min(m.tNear, max(tn, 0.0));
+                m.tFar = max(m.tFar, min(tf, tMax));
+            }
         }
+        gMask[slot + w] = bits;
+        if (bits != 0u) m.words |= 1u << uint(w);
     }
     return m;
 }
 
-bool maskEmpty(RayMask m) { return all(equal(m.bits, uvec4(0u))); }
+bool maskEmpty(RayMask m) { return m.words == 0u; }
 
 // Должно совпадать с sampleVolume() в Scene.cpp
 float sampleVolume(int offset, int res, vec3 v) {
@@ -173,10 +191,14 @@ float sdObject(int i, vec3 p) {
     return d * minScale;
 }
 
-vec2 mapScene(vec3 p, uvec4 mask) {
+// slot и words — маска луча: MASK_VIEW или MASK_SHADOW и RayMask.words от того же buildMask.
+// Порядок обхода — по возрастанию индекса: от него зависит результат CSG.
+vec2 mapScene(vec3 p, int slot, uint words) {
     vec2 res = vec2(100.0, -1.0);
-    for (int w = 0; w < 4; w++) {
-        uint bits = mask[w];
+    while (words != 0u) {
+        int w = findLSB(words);
+        words &= words - 1u;
+        uint bits = gMask[slot + w];
         while (bits != 0u) {
             int i = (w << 5) + findLSB(bits);
             bits &= bits - 1u;
@@ -192,22 +214,22 @@ vec2 mapScene(vec3 p, uvec4 mask) {
     return res;
 }
 
-vec3 getNormal(vec3 p, float t, uvec4 mask) {
+vec3 getNormal(vec3 p, float t, int slot, uint words) {
     float eps = max(0.0005 * t, 0.0002);
     vec2 k = vec2(1.0, -1.0);
     return normalize(
-        k.xyy * mapScene(p + k.xyy * eps, mask).x +
-        k.yyx * mapScene(p + k.yyx * eps, mask).x +
-        k.yxy * mapScene(p + k.yxy * eps, mask).x +
-        k.xxx * mapScene(p + k.xxx * eps, mask).x
+        k.xyy * mapScene(p + k.xyy * eps, slot, words).x +
+        k.yyx * mapScene(p + k.yyx * eps, slot, words).x +
+        k.yxy * mapScene(p + k.yxy * eps, slot, words).x +
+        k.xxx * mapScene(p + k.xxx * eps, slot, words).x
     );
 }
 
-float calcAO(vec3 p, vec3 n, uvec4 mask) {
+float calcAO(vec3 p, vec3 n, int slot, uint words) {
     float occ = 0.0; float sca = 1.0;
     for (int i = 0; i < 3; i++) {
         float h = 0.02 + 0.15 * float(i) / 2.0;
-        float d = mapScene(p + n * h, mask).x;
+        float d = mapScene(p + n * h, slot, words).x;
         occ += (h - d) * sca; sca *= 0.8;
     }
     return clamp(1.0 - 2.5 * occ, 0.0, 1.0);
@@ -215,7 +237,7 @@ float calcAO(vec3 p, vec3 n, uvec4 mask) {
 
 // soft: полутень шириной k; иначе — жёсткая тень
 float calcShadow(vec3 ro, vec3 rd, float tMax, bool soft, float k) {
-    RayMask m = buildMask(ro, rd, tMax, soft ? 0.5 : 0.0);
+    RayMask m = buildMask(ro, rd, tMax, soft ? 0.5 : 0.0, MASK_SHADOW);
     if (maskEmpty(m)) return 1.0;
 
     int steps = u.quality.z;
@@ -223,7 +245,7 @@ float calcShadow(vec3 ro, vec3 rd, float tMax, bool soft, float k) {
     if (!soft) {
         float h = 1.0;
         for (int i = 0; i < steps; i++) {
-            h = mapScene(ro + rd * t, m.bits).x;
+            h = mapScene(ro + rd * t, MASK_SHADOW, m.words).x;
             if (h < 0.001) return 0.0;
             t += h;
             if (t > m.tFar) return 1.0;
@@ -236,7 +258,7 @@ float calcShadow(vec3 ro, vec3 rd, float tMax, bool soft, float k) {
     float ph = 1e10;
     t += hash12(vec2(gl_GlobalInvocationID.xy)) * 0.02;
     for (int i = 0; i < steps; i++) {
-        float h = mapScene(ro + rd * t, m.bits).x;
+        float h = mapScene(ro + rd * t, MASK_SHADOW, m.words).x;
         float y = h * h / (2.0 * ph);
         float d = sqrt(max(h * h - y * y, 0.0));
         res = min(res, k * d / max(0.0001, t - y));
@@ -349,7 +371,7 @@ void main() {
 
     for (int bounce = 0; bounce < maxBounces; bounce++) {
         float tMax = (bounce == 0) ? 100.0 : 40.0;
-        RayMask m = buildMask(ro, rd, tMax, 0.0);
+        RayMask m = buildMask(ro, rd, tMax, 0.0, MASK_VIEW);
 
         float t = max(m.tNear, (bounce == 0) ? 0.1 : 0.02);
         float objID = -1.0;
@@ -360,7 +382,7 @@ void main() {
         if (!maskEmpty(m)) {
             for (int i = 0; i < maxSteps; i++) {
                 stepsTaken++;
-                vec2 res = mapScene(ro + rd * t, m.bits);
+                vec2 res = mapScene(ro + rd * t, MASK_VIEW, m.words);
                 if (abs(res.x) < (pixelRadius * t * 0.5)) {
                     hit = true; objID = res.y;
                     if (bounce == 0) firstHitT = t;
@@ -376,7 +398,7 @@ void main() {
             if (hit) {
                 float heat = float(stepsTaken) / float(maxSteps) * 2.0;
                 vec3 col = mix(vec3(0.1, 0.8, 0.2), vec3(0.9, 0.1, 0.1), clamp(heat, 0.0, 1.0));
-                vec3 n = getNormal(ro + rd * t, t, m.bits);
+                vec3 n = getNormal(ro + rd * t, t, MASK_VIEW, m.words);
                 float edge = 1.0 - abs(dot(n, -rd));
                 finalColor = mix(col, vec3(1.0), pow(edge, 4.0));
             } else {
@@ -393,7 +415,7 @@ void main() {
 
         // Освещение
         vec3 p = ro + rd * (t - pixelRadius * t * 0.5);
-        vec3 n = getNormal(p, t, m.bits);
+        vec3 n = getNormal(p, t, MASK_VIEW, m.words);
         vec3 albedo = vec3(0.8); float metallic = 0.0; float roughness = 0.5;
 
         if (objID >= 0.0) {
@@ -444,7 +466,7 @@ void main() {
         }
 
         // Окружающий свет от неба (дешёвая замена GI)
-        float ao = ((flags & FLAG_AO) != 0) ? calcAO(p, n, m.bits) : 1.0;
+        float ao = ((flags & FLAG_AO) != 0) ? calcAO(p, n, MASK_VIEW, m.words) : 1.0;
         vec3 hemi = mix(u.skyHorizon.rgb * 0.35, u.skyTop.rgb, n.y * 0.5 + 0.5);
         vec3 F0 = mix(vec3(0.04), albedo, metallic);
         vec3 F = fresnelSchlick(max(dot(n, viewDir), 0.0), F0);

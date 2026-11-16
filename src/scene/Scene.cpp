@@ -672,6 +672,110 @@ void applyMaterialPreset(SceneNode& node, const MaterialPreset& preset) {
 }
 
 // =================================================================
+// Узлы во время игры: удаление с повторным использованием мест, копии поддеревьев
+// =================================================================
+void destroyNode(int nodeIdx) {
+    if (nodeIdx < 0 || nodeIdx >= (int)sceneGraph.size() || sceneGraph[nodeIdx].destroyed) return;
+    sceneGraph[nodeIdx].destroyed = true;
+    if (sceneGraph[nodeIdx].name.empty()) sceneGraph[nodeIdx].name = "?";
+    sceneGraph[nodeIdx].active = false;
+    sceneGraph[nodeIdx].worldActive = false;
+    std::vector<int> children = sceneGraph[nodeIdx].children;
+    for (int child : children) destroyNode(child);
+}
+
+void flushDestroyed() {
+    for (int i = 0; i < (int)sceneGraph.size(); i++) {
+        SceneNode& n = sceneGraph[i];
+        if (!n.destroyed || n.name.empty()) continue;   // Пустое имя — место уже освобождено
+        if (n.parent >= 0 && n.parent < (int)sceneGraph.size()) {
+            auto& siblings = sceneGraph[n.parent].children;
+            siblings.erase(std::remove(siblings.begin(), siblings.end(), i), siblings.end());
+        }
+        uint32_t generation = n.generation + 1;
+        n = SceneNode();
+        n.destroyed = true;
+        n.active = n.worldActive = false;
+        n.generation = generation;
+    }
+    // Ссылки на освобождённые узлы обнуляются, чтобы не указать потом на чужой объект
+    for (SceneNode& n : sceneGraph) {
+        if (n.destroyed) continue;
+        if (n.triggerTarget >= 0 && n.triggerTarget < (int)sceneGraph.size() && sceneGraph[n.triggerTarget].destroyed) n.triggerTarget = -1;
+    }
+}
+
+std::vector<SceneNode> copySubtree(int nodeIdx) {
+    std::vector<SceneNode> out;
+    if (nodeIdx < 0 || nodeIdx >= (int)sceneGraph.size()) return out;
+    std::vector<int> order = { nodeIdx };
+    for (size_t i = 0; i < order.size(); i++) for (int child : sceneGraph[order[i]].children) order.push_back(child);
+    auto local = [&](int index) {
+        auto it = std::find(order.begin(), order.end(), index);
+        return it == order.end() ? -1 : (int)(it - order.begin());
+    };
+    for (int index : order) {
+        SceneNode copy = sceneGraph[index];
+        copy.children.clear();
+        copy.parent = index == nodeIdx ? -1 : local(copy.parent);
+        // Ссылки внутрь поддерева переезжают вместе с копией, наружу — остаются как были (помечены смещением)
+        int target = local(copy.triggerTarget);
+        copy.triggerTarget = target >= 0 ? target : (copy.triggerTarget >= 0 ? -2 - copy.triggerTarget : -1);
+        for (auto& v : copy.script.vars) { int t = local(v.node); v.node = t >= 0 ? t : (v.node >= 0 ? -2 - v.node : -1); }
+        out.push_back(copy);
+    }
+    return out;
+}
+
+int spawnNodes(std::vector<SceneNode> nodes, int parent) {
+    if (nodes.empty()) return -1;
+    int roots = 0;
+    for (const auto& n : nodes) if (n.parent < 0) roots++;
+    if (roots > 1) {
+        // Несколько корней собираются под один пустой узел — его и получит вызвавший
+        SceneNode holder;
+        holder.name = "Prefab";
+        for (auto& n : nodes) {
+            n.parent = n.parent < 0 ? 0 : n.parent + 1;
+            if (n.triggerTarget >= 0) n.triggerTarget++;
+            for (auto& v : n.script.vars) if (v.node >= 0) v.node++;
+        }
+        nodes.insert(nodes.begin(), holder);
+    }
+
+    std::vector<int> slots;
+    for (int i = 0; i < (int)sceneGraph.size() && slots.size() < nodes.size(); i++) {
+        if (sceneGraph[i].destroyed && sceneGraph[i].name.empty()) slots.push_back(i);
+    }
+    int fresh = (int)nodes.size() - (int)slots.size();
+    if ((int)sceneGraph.size() + fresh > MAX_OBJECTS) return -1;
+    for (int i = 0; i < fresh; i++) { slots.push_back((int)sceneGraph.size()); sceneGraph.emplace_back(); }
+
+    // Индекс внутри набора -> место в сцене; отрицательные «-2 - i» — ссылки наружу из copySubtree
+    auto remap = [&](int index) { return index >= 0 ? slots[index] : (index <= -2 ? -2 - index : -1); };
+    for (size_t i = 0; i < nodes.size(); i++) {
+        SceneNode n = nodes[i];
+        uint32_t generation = sceneGraph[slots[i]].generation + 1;
+        n.children.clear();
+        n.parent = n.parent >= 0 ? slots[n.parent] : parent;
+        n.triggerTarget = remap(n.triggerTarget);
+        for (auto& v : n.script.vars) v.node = remap(v.node);
+        n.destroyed = false;
+        n.generation = generation;
+        n.body.sleeping = false;
+        n.animation.time = 0.0f; n.animation.playing = false;
+        if (n.parent < 0) n.active = true;
+        sceneGraph[slots[i]] = n;
+    }
+    for (size_t i = 0; i < nodes.size(); i++) {
+        int p = sceneGraph[slots[i]].parent;
+        if (p >= 0 && p < (int)sceneGraph.size()) sceneGraph[p].children.push_back(slots[i]);
+    }
+    for (size_t i = 0; i < nodes.size(); i++) if (nodes[i].parent < 0) return slots[i];
+    return slots[0];
+}
+
+// =================================================================
 // --- Файлы сцен (.nos) ---
 // Раскладка v100 сохранена, чтобы старые сборки открывали новые файлы.
 // Всё новое (имена, локальные трансформации, компоненты, мир) лежит
@@ -681,7 +785,7 @@ std::function<int(const std::string&)> g_meshLoader;
 
 namespace {
     const uint32_t NOS_VERSION = 200;
-    const uint32_t NOSX_VERSION = 4;   // 2: твёрдые тела и скрипты; 3: коллайдер, звук, контроллер, камера; 4: воксельные сетки
+    const uint32_t NOSX_VERSION = 6;   // 2: твёрдые тела и скрипты; 3: коллайдер, звук, контроллер, камера; 4: воксельные сетки; 5: частицы и анимация; 6: освещаемые частицы
 
     template <typename T> void writePod(std::ostream& f, const T& v) { f.write(reinterpret_cast<const char*>(&v), sizeof(T)); }
     template <typename T> bool readPod(std::istream& f, T& v) { f.read(reinterpret_cast<char*>(&v), sizeof(T)); return (bool)f; }
@@ -753,22 +857,34 @@ bool saveScene(const std::string& path, const std::vector<uint8_t>& thumbnailRgb
         int32_t volumeRes = node.volume ? node.volume->resolution : 0;
         writePod(file, volumeRes);
         if (volumeRes > 0) file.write(reinterpret_cast<const char*>(node.volume->distances.data()), node.volume->distances.size() * sizeof(float));
+        // --- версия 5 ---
+        const ParticleEmitter& e = node.emitter;
+        writePod(file, (uint8_t)e.enabled); writePod(file, (uint8_t)e.emitting); writePod(file, (uint8_t)e.collide);
+        writePod(file, e.rate); writePod(file, e.lifetime); writePod(file, e.speed); writePod(file, e.spread); writePod(file, e.gravityScale);
+        writePod(file, e.sizeStart); writePod(file, e.sizeEnd); writePod(file, e.colorStart); writePod(file, e.colorEnd);
+        const NodeAnimation& an = node.animation;
+        writePod(file, (uint8_t)an.enabled); writePod(file, (uint8_t)an.loop); writePod(file, (uint8_t)an.pingPong); writePod(file, (uint8_t)an.playOnStart);
+        writePod(file, an.speed);
+        writePod(file, (uint32_t)an.keys.size());
+        for (const Keyframe& k : an.keys) { writePod(file, k.time); writePod(file, k.position); writePod(file, k.rotation); writePod(file, k.scale); }
+        // --- версия 6 ---
+        writePod(file, (uint8_t)e.lit);
     }
     writePod(file, world.sunAzimuth); writePod(file, world.sunElevation); writePod(file, world.sunIntensity);
     writePod(file, world.sunColor); writePod(file, world.skyTop); writePod(file, world.skyHorizon); writePod(file, world.ambient);
     return (bool)file;
 }
 
-bool loadScene(const std::string& path, bool append) {
+namespace {
+// Разбор файла сцены в набор узлов; сцену не трогает
+bool readNos(const std::string& path, std::vector<SceneNode>& nodes, NosHeader& header, SceneMetadata& meta, WorldSettings& loadedWorld, bool& hasWorld) {
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) return false;
-    NosHeader header;
     if (!readPod(file, header) || strncmp(header.magic, "NOS!", 4) != 0) return false;
-    SceneMetadata meta;
     if (!readPod(file, meta)) return false;
     if (header.objectCount > 100000) return false;
 
-    std::vector<SceneNode> nodes;
+    nodes.clear();
     nodes.reserve(header.objectCount);
     for (uint32_t i = 0; i < header.objectCount; ++i) {
         SceneNode n;
@@ -783,8 +899,7 @@ bool loadScene(const std::string& path, bool append) {
     }
 
     // Блок расширения (его нет в файлах старых версий)
-    WorldSettings loadedWorld;
-    bool hasWorld = false;
+    hasWorld = false;
     file.seekg((std::streamoff)header.thumbnailOffset + header.thumbnailSize);
     char magic[4] = {};
     uint32_t extVersion = 0, extCount = 0;
@@ -839,6 +954,27 @@ bool loadScene(const std::string& path, bool append) {
                     n.volume = volume;
                 }
             }
+            if (ok && extVersion >= 5) {
+                uint8_t f[7] = {}; uint32_t keyCount = 0;
+                ParticleEmitter& e = n.emitter; NodeAnimation& an = n.animation;
+                ok = readPod(file, f[0]) && readPod(file, f[1]) && readPod(file, f[2])
+                  && readPod(file, e.rate) && readPod(file, e.lifetime) && readPod(file, e.speed) && readPod(file, e.spread) && readPod(file, e.gravityScale)
+                  && readPod(file, e.sizeStart) && readPod(file, e.sizeEnd) && readPod(file, e.colorStart) && readPod(file, e.colorEnd)
+                  && readPod(file, f[3]) && readPod(file, f[4]) && readPod(file, f[5]) && readPod(file, f[6])
+                  && readPod(file, an.speed) && readPod(file, keyCount) && keyCount <= 4096;
+                e.enabled = f[0]; e.emitting = f[1]; e.collide = f[2];
+                an.enabled = f[3]; an.loop = f[4]; an.pingPong = f[5]; an.playOnStart = f[6];
+                for (uint32_t k = 0; ok && k < keyCount; k++) {
+                    Keyframe key;
+                    ok = readPod(file, key.time) && readPod(file, key.position) && readPod(file, key.rotation) && readPod(file, key.scale);
+                    an.keys.push_back(key);
+                }
+            }
+            if (ok && extVersion >= 6) {
+                uint8_t lit = 0;
+                ok = readPod(file, lit);
+                n.emitter.lit = lit != 0;
+            }
             if (!ok) break;
             n.active = active != 0; n.isTrigger = isTrigger != 0; n.behaviorOn = behaviorOn != 0;
             n.triggerTarget = target;
@@ -874,6 +1010,20 @@ bool loadScene(const std::string& path, bool append) {
             n.meshIdx = g_meshLoader ? g_meshLoader(n.meshPath) : -1;
         }
     }
+    return true;
+}
+}
+
+bool readSceneNodes(const std::string& path, std::vector<SceneNode>& nodes) {
+    NosHeader header; SceneMetadata meta; WorldSettings loadedWorld; bool hasWorld = false;
+    return readNos(path, nodes, header, meta, loadedWorld, hasWorld);
+}
+
+bool loadScene(const std::string& path, bool append) {
+    std::vector<SceneNode> nodes;
+    NosHeader header; SceneMetadata meta; WorldSettings loadedWorld; bool hasWorld = false;
+    if (!readNos(path, nodes, header, meta, loadedWorld, hasWorld)) return false;
+    int count = (int)nodes.size();
 
     if (append) {
         int base = (int)sceneGraph.size();

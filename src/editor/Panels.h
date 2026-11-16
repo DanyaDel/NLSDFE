@@ -28,6 +28,16 @@ void drawModelWorkspace(GLFWwindow* window, const WorkArea& area);
 void drawSceneWorkspace(GLFWwindow* window, const WorkArea& area);
 void drawUvWorkspace(GLFWwindow* window, const WorkArea& area);
 void drawScriptWorkspace(GLFWwindow* window, const WorkArea& area);
+void drawUiWorkspace(GLFWwindow* window, const WorkArea& area);
+
+// Компоненты Animation и Particles (workspaces/Timeline.cpp)
+struct ImDrawList;
+void drawAnimationComponent(SceneNode& node, int nodeIdx);
+void drawParticlesComponent(SceneNode& node, int nodeIdx);
+void drawEditorParticlePreview(ImDrawList* dl);
+void drawTimelinePanel();           // Вкладка Timeline нижней панели: дорожки всех анимированных объектов
+bool editorPreviewActive();          // Что-то проигрывается во вьюпорте — кадры нужны непрерывно
+void stopEditorPreview();
 void openScriptInEditor(const std::string& projectRelativePath);
 
 // Окно File > Export > Game

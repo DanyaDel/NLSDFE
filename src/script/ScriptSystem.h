@@ -11,6 +11,7 @@ namespace nls {
 struct Host {
     std::function<bool(const std::string& key)> keyDown;      // "w", "space", "shift", "up", "mouse1" ...
     std::function<bool(const std::string& key)> keyPressed;   // Только в кадр нажатия
+    std::function<std::string()> lastKey;                     // Имя клавиши, нажатой в этом кадре ("" — ни одной): для экрана переназначения
     std::function<void(int node)> playSound;                  // Звук компонента Audio Source узла
     std::function<void(int node)> stopSound;
     std::function<std::string(const std::string&)> resolvePath;   // Путь ассета относительно проекта
@@ -48,6 +49,11 @@ public:
     void fixedUpdate(float dt);
     void onCollide(int self, int other);                  // other = -1 — игрок
     void onTrigger(int trigger, int other, bool entered);
+    // Сообщения между скриптами: on message(name: string, value: float) у получателя.
+    // Доставляются после того, как все скрипты отработали кадр, — отправитель и получатель не мешают друг другу.
+    void send(int node, const std::string& name, float value);
+    void broadcast(const std::string& name, float value);
+    void deliverMessages();
 
     void print(const std::string& line);
 
@@ -63,14 +69,17 @@ private:
         VM vm;
         std::string path;
         std::filesystem::file_time_type seen{};   // Версия файла, которую уже пробовали собрать
+        uint32_t generation = 0;                  // Поколение узла: место удалённого узла мог занять новый
         bool started = false;
         bool reported = false;
-        int evUpdate = -1, evFixed = -1, evCollide = -1, evEnter = -1, evExit = -1;
+        int evUpdate = -1, evFixed = -1, evCollide = -1, evEnter = -1, evExit = -1, evMessage = -1;
     };
 
     std::unordered_map<std::string, Cached> cache;
     std::vector<std::unique_ptr<Instance>> instances;     // По индексу узла
     bool running = false;
+    struct Message { int node; uint32_t generation; std::string name; float value; };
+    std::vector<Message> mailbox;
     float reloadTimer = 0.0f;
 
     void ensureInstances();

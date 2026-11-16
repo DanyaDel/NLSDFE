@@ -20,7 +20,7 @@ const int INITIAL_HEIGHT = 720;
 const std::string SHADER_SOURCE = "shaders/shader.comp";
 const std::string SHADER_BINARY = "shader.spv";
 const std::string ENGINE_VERSION = "v1.5.0";
-const int MAX_OBJECTS = 128;   // Лимит узлов сцены (и ширина битовой маски отсечения в шейдере)
+const int MAX_OBJECTS = 512;   // Лимит узлов сцены; маска отсечения в шейдере — MASK_WORDS * 32 бит, менять вместе
 const int MAX_LIGHTS = 8;      // Точечные источники света
 
 // --- Math Types ---
@@ -190,6 +190,42 @@ struct ScriptRef {
     std::vector<ScriptVar> vars;
 };
 
+// Источник частиц: летят вдоль локальной оси +Y узла внутри конуса
+struct ParticleEmitter {
+    bool enabled = false;
+    bool emitting = true;        // Постоянный поток; выключенный источник выпускает частицы только по emit()
+    float rate = 30.0f;          // Частиц в секунду
+    float lifetime = 1.5f;
+    float speed = 2.0f;
+    float spread = 0.35f;        // Полуугол конуса, радианы
+    float gravityScale = 0.3f;   // Доля гравитации мира; отрицательная — частицы всплывают
+    float sizeStart = 0.08f;     // Радиус в метрах
+    float sizeEnd = 0.0f;
+    vec3 colorStart = {1.0f, 0.8f, 0.3f};
+    vec3 colorEnd = {1.0f, 0.2f, 0.05f};
+    bool collide = false;        // Отскакивать от геометрии сцены
+    bool lit = false;            // Освещаются солнцем и темнеют в тени (дым, пыль); выключено — светятся сами (огонь, искры)
+};
+
+// Анимация по ключевым кадрам: локальные положение, поворот и масштаб узла во времени
+struct Keyframe {
+    float time = 0.0f;
+    vec3 position = {0, 0, 0};
+    vec3 rotation = {0, 0, 0};   // Радианы, как localRotation
+    vec3 scale = {1, 1, 1};
+};
+struct NodeAnimation {
+    bool enabled = false;
+    std::vector<Keyframe> keys;  // По возрастанию времени
+    bool loop = true;
+    bool pingPong = false;       // Туда и обратно вместо прыжка в начало
+    bool playOnStart = true;
+    float speed = 1.0f;
+    // Состояние воспроизведения (в файл не пишется)
+    float time = 0.0f;
+    bool playing = false;
+};
+
 struct SceneNode {
     std::string name;
     vec3 localPosition = {0, 0, 0};
@@ -227,6 +263,13 @@ struct SceneNode {
     CharacterController controller;
     float cameraFov = 60.0f;     // Для NODE_CAMERA, градусы по вертикали
     std::shared_ptr<const SdfVolume> volume;   // Для SDF_VOLUME; общий при копировании и undo
+    ParticleEmitter emitter;
+    NodeAnimation animation;
+
+    // Только во время игры: узел удалён скриптом. Его место займёт следующий созданный узел,
+    // поэтому индексы остальных узлов не меняются. generation растёт при каждой смене хозяина.
+    bool destroyed = false;
+    uint32_t generation = 0;
 
     SceneNode() {
         gpuData.invRotation = mat4(1.0f);

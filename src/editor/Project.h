@@ -7,6 +7,7 @@
 //   <root>/assets/   модели .nos и меши
 //   <root>/scenes/   уровни .nos
 //   <root>/scripts/  скрипты .nls
+//   <root>/ui/       экраны интерфейса .nlsui
 //   <root>/project.nlsproj
 struct Project {
     std::string root;
@@ -26,10 +27,10 @@ void saveProject();
 std::string importIntoProject(const std::string& file, const std::string& subdir);
 
 // Режимы редактора (панель под главным меню)
-enum Workspace { WS_MODEL = 0, WS_SCENE, WS_UV, WS_SCRIPT, WS_COUNT };
+enum Workspace { WS_MODEL = 0, WS_SCENE, WS_UV, WS_SCRIPT, WS_UI, WS_COUNT };
 extern Workspace currentWorkspace;
 const char* workspaceName(Workspace ws);
-inline bool workspaceHasViewport(Workspace ws) { return ws != WS_SCRIPT; }
+inline bool workspaceHasViewport(Workspace ws) { return ws != WS_SCRIPT && ws != WS_UI; }
 
 // У моделлера и сцены свои документы; при смене вкладки нужный подставляется в sceneGraph.
 // Все режимы, кроме Model Editor, работают со сценой.

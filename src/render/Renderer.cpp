@@ -1,4 +1,6 @@
 #define VMA_IMPLEMENTATION
+#include <cmath>
+#include <filesystem>
 #include "Renderer.h"
 #include "Scene.h"
 #include "Settings.h"
@@ -467,6 +469,8 @@ void Renderer::createFramebuffers() {
 }
 
 void Renderer::createSceneBuffers() {
+    // Маска отсечения в shader.comp — 16 слов по 32 бита (MASK_WORDS); объекты сверх неё шейдер не увидит
+    static_assert(MAX_OBJECTS <= 16 * 32, "MAX_OBJECTS must fit the ray mask in shader.comp (MASK_WORDS)");
     for (int i = 0; i < FRAMES_IN_FLIGHT; i++) {
         createBuffer(sizeof(GpuObject) * MAX_OBJECTS, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU, sceneBuffers[i], sceneAllocations[i]);
         vkCheck(vmaMapMemory(allocator, sceneAllocations[i], &sceneMapped[i]), "vmaMapMemory");
@@ -1072,6 +1076,21 @@ void Renderer::initImGui(GLFWwindow* window) {
     init_info.QueueFamily = queueFamily; init_info.Queue = queue; init_info.DescriptorPool = imguiDescriptorPool;
     init_info.MinImageCount = 2; init_info.ImageCount = (uint32_t)swapchainImages.size(); init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     if (!ImGui_ImplVulkan_Init(&init_info, renderPass)) throw std::runtime_error("ImGui_ImplVulkan_Init failed");
+
+    // Шрифт интерфейса лежит рядом с исполняемым файлом; без него остаётся встроенный в ImGui.
+    // Размер сразу умножен на масштаб интерфейса — растянутый шрифт был бы мутным.
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        std::string fontFile = getExecutableDir() + "/ui_font.ttf";
+        std::error_code ec;
+        if (std::filesystem::exists(fontFile, ec)) {
+            ImFontConfig config;
+            config.OversampleH = 2; config.OversampleV = 2;
+            io.Fonts->AddFontFromFileTTF(fontFile.c_str(), std::round(16.0f * editorCfg.uiScale), &config, io.Fonts->GetGlyphRangesCyrillic());
+        } else if (editorCfg.uiScale != 1.0f) {
+            io.FontGlobalScale = editorCfg.uiScale;
+        }
+    }
 
     VkCommandBuffer cb = beginOneShot();
     ImGui_ImplVulkan_CreateFontsTexture(cb);

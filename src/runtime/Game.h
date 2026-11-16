@@ -1,5 +1,6 @@
 #pragma once
 #include "Common.h"
+#include "GameApi.h"
 
 // Play Mode: сцена оживает — физика, скрипты, звук, персонажи.
 // Смотрим через узел-камеру; управляются только узлы с компонентом Character Controller.
@@ -22,3 +23,10 @@ void updatePlay(GLFWwindow* window, float deltaTime);
 // Интерфейс поверх игры (ImGui-кадр уже начат, ImGui::Render вызывает приложение)
 void drawPlayHud();
 void drawToast();
+
+// Рисует примитивы игрового интерфейса в прямоугольник rect (x, y, w, h в пикселях).
+// Им же пользуется предпросмотр в UI Editor.
+struct ImDrawList;
+// Частицы поверх кадра текущей камеры, в пределах viewportRect
+void drawParticlesOverlay(ImDrawList* dl);
+void drawHudItems(ImDrawList* dl, vec4 rect, const std::vector<nls::game::HudItem>& items);

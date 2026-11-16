@@ -28,6 +28,7 @@ const std::vector<EventSignature> eventSignatures = {
     {"collide", {Type::Node}},
     {"triggerEnter", {Type::Node}},
     {"triggerExit", {Type::Node}},
+    {"message", {Type::String, Type::Float}},
 };
 
 class Compiler {

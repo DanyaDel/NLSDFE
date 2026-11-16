@@ -11,6 +11,7 @@
 #include "EngineBridge.h"
 #include "FileDialogs.h"
 #include "MathUtils.h"
+#include "Input.h"
 #include "imgui.h"
 #include <numeric>
 #include <algorithm>
@@ -157,6 +158,7 @@ void drawViewportOverlays() {
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     ImVec2 vpMin(viewportRect.x, viewportRect.y), vpMax(viewportRect.x + viewportRect.z, viewportRect.y + viewportRect.w);
     dl->PushClipRect(vpMin, vpMax, true);
+    drawEditorParticlePreview(dl);
 
     // Значки узлов без собственной геометрии
     for (int i = 0; i < (int)sceneGraph.size(); i++) {
@@ -224,10 +226,12 @@ void drawViewportOverlays() {
 
 // --- Браузер ассетов ---
 // =================================================================
+enum AssetKind { ASSET_MODEL, ASSET_PREFAB, ASSET_SOUND, ASSET_SCRIPT };
 struct AssetEntry {
     std::string path;
     std::string name;
     void* texture = nullptr;
+    int kind = ASSET_MODEL;
 };
 static std::vector<AssetEntry> assetEntries;
 static bool assetsScanned = false;
@@ -244,25 +248,66 @@ static void scanAssets() {
     assetsScannedDir = assetDirectory();
 
     std::error_code ec;
-    if (!std::filesystem::is_directory(assetDirectory(), ec)) return;
-    for (const auto& entry : std::filesystem::directory_iterator(assetDirectory(), ec)) {
-        if (!entry.is_regular_file(ec) || entry.path().extension() != ".nos") continue;
-        AssetEntry e;
-        e.path = entry.path().string();
-        e.name = entry.path().stem().string();
-        assetEntries.push_back(e);
-        if (assetEntries.size() >= 64) break;
-    }
-    std::sort(assetEntries.begin(), assetEntries.end(), [](const AssetEntry& a, const AssetEntry& b) { return a.name < b.name; });
+    // Модели, префабы, звуки и скрипты проекта: всё, что можно бросить во вьюпорт
+    auto collect = [&](const std::string& dir, int kind, std::initializer_list<const char*> extensions) {
+        if (!std::filesystem::is_directory(dir, ec)) return;
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+            if (!entry.is_regular_file(ec) || assetEntries.size() >= 256) continue;
+            std::string ext = entry.path().extension().string();
+            if (std::find_if(extensions.begin(), extensions.end(), [&](const char* x) { return ext == x; }) == extensions.end()) continue;
+            AssetEntry e;
+            e.path = entry.path().string();
+            e.name = kind == ASSET_MODEL || kind == ASSET_PREFAB ? entry.path().stem().string() : entry.path().filename().string();
+            e.kind = kind;
+            assetEntries.push_back(e);
+        }
+    };
+    collect(assetDirectory(), ASSET_MODEL, { ".nos" });
+    collect(project.path("assets/prefabs"), ASSET_PREFAB, { ".nos" });
+    collect(project.path("assets/sounds"), ASSET_SOUND, { ".wav", ".mp3", ".flac", ".ogg" });
+    collect(project.path("scripts"), ASSET_SCRIPT, { ".nls", ".nlsg" });
+    std::stable_sort(assetEntries.begin(), assetEntries.end(), [](const AssetEntry& a, const AssetEntry& b) { return a.kind != b.kind ? a.kind < b.kind : a.name < b.name; });
     for (auto& e : assetEntries) {
         std::vector<uint8_t> pixels;
-        if (readNosThumbnail(e.path, pixels)) e.texture = createUiTexture(pixels.data(), NOS_THUMB_W, NOS_THUMB_H);
+        if (e.kind <= ASSET_PREFAB && readNosThumbnail(e.path, pixels)) e.texture = createUiTexture(pixels.data(), NOS_THUMB_W, NOS_THUMB_H);
     }
 }
 
-void drawAssetBrowser(float x, float y, float w, float h) {
-    ImGui::SetNextWindowPos(ImVec2(x, y)); ImGui::SetNextWindowSize(ImVec2(w, h));
-    ImGui::Begin("Assets", nullptr, PANEL_FLAGS | ImGuiWindowFlags_NoTitleBar);
+// Точка сцены под курсором: куда встанет брошенный ассет. false — луч ушёл в небо.
+static bool pointUnderMouse(ImVec2 mouse, vec3& point) {
+    Ray ray = getRayFromMouse(mouse.x, mouse.y);
+    float t = 0.0f;
+    for (int step = 0; step < 128 && t < 200.0f; step++) {
+        float d = sceneDistance(ray.origin + ray.dir * t);
+        if (d < 0.002f) { point = ray.origin + ray.dir * t; return true; }
+        t += d;
+    }
+    return false;
+}
+
+// Ассет отпустили над вьюпортом
+static void dropAsset(const AssetEntry& e, ImVec2 mouse) {
+    if (e.kind == ASSET_MODEL || e.kind == ASSET_PREFAB) {
+        vec3 point;
+        bool hit = pointUnderMouse(mouse, point);
+        int before = (int)sceneGraph.size();
+        appendNos(e.path);
+        // Добавленное встаёт туда, куда показали мышью (корни сдвигаются, дети едут следом)
+        if (hit) for (int i = before; i < (int)sceneGraph.size(); i++) if (sceneGraph[i].parent < before) sceneGraph[i].localPosition += point;
+        return;
+    }
+    int target = pickNode(getRayFromMouse(mouse.x, mouse.y));
+    if (target < 0) { showToast("Drop it on an object"); return; }
+    saveUndo();
+    SceneNode& node = sceneGraph[target];
+    std::string rel = project.relative(e.path);
+    std::replace(rel.begin(), rel.end(), '\\', '/');
+    if (e.kind == ASSET_SOUND) { node.audio.enabled = true; node.audio.clip = rel; showToast("Sound on " + node.name + ": " + e.name); }
+    else { node.script.path = rel; node.script.vars.clear(); showToast("Script on " + node.name + ": " + e.name); }
+    selectedIndices = { target };
+}
+
+static void assetBrowserContent() {
     // Пересканирование — до первого ImGui::Image, пока старые текстуры ещё не попали в кадр
     bool rescan = !assetsScanned || assetsScannedDir != assetDirectory();
 
@@ -289,23 +334,31 @@ void drawAssetBrowser(float x, float y, float w, float h) {
     ImGui::Separator();
 
     ImGui::BeginChild("AssetGrid", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
-    if (assetEntries.empty()) ImGui::TextDisabled("No .nos files here yet. Double-click an asset to open it, drag it into the viewport to append.");
+    if (assetEntries.empty()) ImGui::TextDisabled("Nothing here yet. Drag models and prefabs into the viewport; sounds and scripts — onto an object.");
+    static const char* kindLabels[] = { "model", "prefab", "sound", "script" };
     const ImVec2 thumb(128, 72);
     for (int i = 0; i < (int)assetEntries.size(); i++) {
         const AssetEntry& e = assetEntries[i];
         ImGui::PushID(i);
         ImGui::BeginGroup();
         if (e.texture) ImGui::ImageButton("##thumb", (ImTextureID)e.texture, thumb);
-        else ImGui::Button("No preview", ImVec2(thumb.x + 8, thumb.y + 8));
-        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) loadNos(e.path);
+        else ImGui::Button(kindLabels[e.kind], ImVec2(thumb.x + 8, thumb.y + 8));
+        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+            if (e.kind <= ASSET_PREFAB) loadNos(e.path);
+            else if (e.kind == ASSET_SCRIPT) { openScriptInEditor(project.relative(e.path)); }
+        }
         if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
             ImGui::SetDragDropPayload("ASSET_NOS", &i, sizeof(int));
-            ImGui::Text("Append %s", e.name.c_str());
+            ImGui::Text(e.kind <= ASSET_PREFAB ? "Place %s" : "Put %s on an object", e.name.c_str());
             ImGui::EndDragDropSource();
         }
         if (ImGui::BeginPopupContextItem("##ctx")) {
-            if (ImGui::MenuItem("Open")) loadNos(e.path);
-            if (ImGui::MenuItem("Append to scene")) appendNos(e.path);
+            if (e.kind <= ASSET_PREFAB) {
+                if (ImGui::MenuItem("Open")) loadNos(e.path);
+                if (ImGui::MenuItem("Append to scene")) appendNos(e.path);
+            } else if (e.kind == ASSET_SCRIPT) {
+                if (ImGui::MenuItem("Edit")) openScriptInEditor(project.relative(e.path));
+            } else ImGui::TextDisabled("Drag onto an object");
             ImGui::EndPopup();
         }
         ImGui::TextUnformatted(e.name.substr(0, 18).c_str());
@@ -314,7 +367,6 @@ void drawAssetBrowser(float x, float y, float w, float h) {
         ImGui::SameLine();
     }
     ImGui::EndChild();
-    ImGui::End();
 
     // Ассет бросили во вьюпорт
     const ImGuiPayload* payload = ImGui::GetDragDropPayload();
@@ -322,8 +374,61 @@ void drawAssetBrowser(float x, float y, float w, float h) {
         ImVec2 m = ImGui::GetMousePos();
         int idx = *(const int*)payload->Data;
         bool inViewport = m.x >= viewportRect.x && m.y >= viewportRect.y && m.x < viewportRect.x + viewportRect.z && m.y < viewportRect.y + viewportRect.w;
-        if (inViewport && idx >= 0 && idx < (int)assetEntries.size()) appendNos(assetEntries[idx].path);
+        if (inViewport && idx >= 0 && idx < (int)assetEntries.size()) dropAsset(assetEntries[idx], m);
     }
+}
+
+// Вывод скриптов: то же, что вкладка Console в Script Editor
+static void consoleContent() {
+    if (ImGui::SmallButton("Clear")) nls::scripts.console.clear();
+    ImGui::SameLine();
+    ImGui::TextDisabled("log() output and script errors");
+    ImGui::BeginChild("BottomConsole");
+    for (const auto& line : nls::scripts.console) {
+        if (line.compare(0, 5, "ERROR") == 0) ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", line.c_str());
+        else ImGui::TextUnformatted(line.c_str());
+    }
+    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 4.0f) ImGui::SetScrollHereY(1.0f);
+    ImGui::EndChild();
+}
+
+// Нижняя панель: ассеты, таймлайн и консоль вкладками
+void drawAssetBrowser(float x, float y, float w, float h) {
+    ImGui::SetNextWindowPos(ImVec2(x, y)); ImGui::SetNextWindowSize(ImVec2(w, h));
+    ImGui::Begin("Assets", nullptr, PANEL_FLAGS | ImGuiWindowFlags_NoTitleBar);
+    static size_t seenLines = 0;
+    bool newErrors = false;
+    for (size_t i = seenLines; i < nls::scripts.console.size(); i++) if (nls::scripts.console[i].compare(0, 5, "ERROR") == 0) newErrors = true;
+    if (nls::scripts.console.size() < seenLines) seenLines = 0;
+    if (ImGui::BeginTabBar("BottomTabs")) {
+        if (ImGui::BeginTabItem("Assets")) { assetBrowserContent(); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Timeline")) { drawTimelinePanel(); ImGui::EndTabItem(); }
+        // Непрочитанные ошибки скриптов помечают вкладку
+        if (ImGui::BeginTabItem(newErrors ? "Console (!)###console" : "Console###console")) { seenLines = nls::scripts.console.size(); consoleContent(); ImGui::EndTabItem(); }
+        ImGui::EndTabBar();
+    }
+    ImGui::End();
+}
+
+// Граница между панелями, которую тянут мышью. value меняется на сдвиг мыши * sign.
+static bool splitter(const char* id, float x, float y, float w, float h, bool vertical, float* value, float sign, float low, float high) {
+    ImGui::SetNextWindowPos(ImVec2(x, y)); ImGui::SetNextWindowSize(ImVec2(w, h));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1, 1));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+    ImGui::Begin(id, nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoFocusOnAppearing);
+    ImGui::InvisibleButton("##grip", ImVec2(w, h));
+    bool active = ImGui::IsItemActive(), hovered = ImGui::IsItemHovered();
+    if (active || hovered) {
+        ImGui::SetMouseCursor(vertical ? ImGuiMouseCursor_ResizeEW : ImGuiMouseCursor_ResizeNS);
+        ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), IM_COL32(72, 143, 230, active ? 255 : 140));
+    }
+    if (active) *value = std::clamp(*value + sign * (vertical ? ImGui::GetIO().MouseDelta.x : ImGui::GetIO().MouseDelta.y), low, high);
+    bool released = ImGui::IsItemDeactivated();
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+    return released;
 }
 
 
@@ -610,6 +715,18 @@ static void renderComponents(SceneNode& node, int nodeIdx) {
         if (removed) { saveUndo(); node.behavior = BEHAVIOR_NONE; removed = false; }
     }
 
+    // --- Animation ---
+    if (node.animation.enabled) {
+        if (componentHeader("Animation", &removed)) drawAnimationComponent(node, nodeIdx);
+        if (removed) { saveUndo(); node.animation = NodeAnimation(); removed = false; }
+    }
+
+    // --- Particles ---
+    if (node.emitter.enabled) {
+        if (componentHeader("Particles", &removed)) drawParticlesComponent(node, nodeIdx);
+        if (removed) { saveUndo(); node.emitter = ParticleEmitter(); removed = false; }
+    }
+
     // --- Add Component ---
     ImGui::Spacing();
     float width = ImGui::GetContentRegionAvail().x;
@@ -626,6 +743,8 @@ static void renderComponents(SceneNode& node, int nodeIdx) {
         if (ImGui::MenuItem("Character Controller", nullptr, false, !node.controller.enabled)) { saveUndo(); node.controller.enabled = true; }
         if (ImGui::MenuItem("Audio Source", nullptr, false, !node.audio.enabled)) { saveUndo(); node.audio.enabled = true; }
         if (ImGui::MenuItem("Behavior", nullptr, false, node.behavior == BEHAVIOR_NONE)) { saveUndo(); node.behavior = BEHAVIOR_ROTATE; }
+        if (ImGui::MenuItem("Animation", nullptr, false, !node.animation.enabled)) { saveUndo(); node.animation.enabled = true; }
+        if (ImGui::MenuItem("Particles", nullptr, false, !node.emitter.enabled)) { saveUndo(); node.emitter.enabled = true; }
         if (ImGui::BeginMenu("Script", node.script.path.empty())) {
             std::vector<std::string> files = project.list("scripts", ".nls");
             for (const std::string& f : project.list("scripts", ".nlsg")) files.push_back(f);   // Визуальные скрипты
@@ -712,20 +831,33 @@ void drawInspectorPanel(float x, float y, float w, float h, bool gameplay) {
 
 void drawEditingLayout(GLFWwindow* window, const WorkArea& area, bool gameplay) {
     // Панели вплотную к краям, всё остальное — вьюпорт
-    float toolbarWidth = showToolbar ? 50.0f : 0.0f;
-    float rightPanelWidth = showSidebar ? std::min(320.0f, area.w * 0.45f) : 0.0f;
-    float assetHeight = showAssetBrowser ? std::min(150.0f, area.h * 0.4f) : 0.0f;
+    float ui = editorCfg.uiScale;
+    float toolbarWidth = showToolbar ? 50.0f * ui : 0.0f;
+    float rightPanelWidth = showSidebar ? std::clamp(editorCfg.sidebarWidth * ui, 180.0f, std::max(area.w * 0.6f, 180.0f)) : 0.0f;
+    float assetHeight = showAssetBrowser ? std::clamp(editorCfg.bottomHeight * ui, 80.0f, std::max(area.h * 0.7f, 80.0f)) : 0.0f;
     float centerWidth = std::max(area.w - toolbarWidth - rightPanelWidth, 1.0f);
     viewportRect = vec4(area.x + toolbarWidth, area.y, centerWidth, std::max(area.h - assetHeight, 1.0f));
 
     if (showToolbar) drawToolbar(area.x, area.y, toolbarWidth, area.h);
     if (showSidebar) {
         float rightX = area.x + area.w - rightPanelWidth;
-        float hierarchyHeight = area.h * 0.4f;
+        float hierarchyHeight = area.h * editorCfg.hierarchySplit;
         drawHierarchyPanel(rightX, area.y, rightPanelWidth, hierarchyHeight);
         drawInspectorPanel(rightX, area.y + hierarchyHeight, rightPanelWidth, area.h - hierarchyHeight, gameplay);
     }
     if (showAssetBrowser) drawAssetBrowser(area.x + toolbarWidth, area.y + area.h - assetHeight, centerWidth, assetHeight);
+
+    // Границы панелей тянутся мышью; размеры запоминаются в настройках
+    bool resized = false;
+    if (showSidebar) {
+        float rightX = area.x + area.w - rightPanelWidth;
+        resized |= splitter("##splitSidebar", rightX - 3.0f, area.y, 6.0f, area.h, true, &editorCfg.sidebarWidth, -1.0f / ui, 180.0f, 900.0f);
+        float split = editorCfg.hierarchySplit * area.h;
+        resized |= splitter("##splitHierarchy", rightX + 3.0f, area.y + split - 3.0f, rightPanelWidth - 3.0f, 6.0f, false, &split, 1.0f, area.h * 0.1f, area.h * 0.9f);
+        editorCfg.hierarchySplit = split / area.h;
+    }
+    if (showAssetBrowser) resized |= splitter("##splitBottom", area.x + toolbarWidth, area.y + area.h - assetHeight - 3.0f, centerWidth - 3.0f, 6.0f, false, &editorCfg.bottomHeight, -1.0f / ui, 80.0f, 900.0f);
+    if (resized) saveSettings(settingsPath());
 
     drawViewportOverlays();
 

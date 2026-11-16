@@ -30,6 +30,10 @@ struct EditorSettings {
     float snapAngleDeg = 15.0f;
     float fovDeg = 45.0f;
     bool showStats = true;
+    float uiScale = 1.0f;             // Масштаб интерфейса: шрифт и отступы (применяется при запуске)
+    float sidebarWidth = 320.0f;      // Размеры панелей — их двигают мышью за границы
+    float bottomHeight = 180.0f;
+    float hierarchySplit = 0.4f;      // Доля боковой панели под иерархию
     std::string projectDir = "project";
     std::string blenderPath = "blender";   // Для Object > Edit in Blender   // Папка проекта: assets/, scenes/, scripts/
     std::string lastVersion;          // Для показа changelog один раз на версию

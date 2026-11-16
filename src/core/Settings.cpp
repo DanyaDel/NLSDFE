@@ -71,6 +71,10 @@ bool loadSettings(const std::string& path) {
             else if (k == "snapAngleDeg") editorCfg.snapAngleDeg = std::stof(v);
             else if (k == "fovDeg") editorCfg.fovDeg = std::stof(v);
             else if (k == "showStats") editorCfg.showStats = std::stoi(v) != 0;
+            else if (k == "uiScale") editorCfg.uiScale = std::clamp(std::stof(v), 0.75f, 3.0f);
+            else if (k == "sidebarWidth") editorCfg.sidebarWidth = std::stof(v);
+            else if (k == "bottomHeight") editorCfg.bottomHeight = std::stof(v);
+            else if (k == "hierarchySplit") editorCfg.hierarchySplit = std::clamp(std::stof(v), 0.1f, 0.9f);
             else if (k == "projectDir") editorCfg.projectDir = v;
             else if (k == "blenderPath") editorCfg.blenderPath = v;
             else if (k == "lastVersion") editorCfg.lastVersion = v;
@@ -114,6 +118,10 @@ void saveSettings(const std::string& path) {
     f << "snapAngleDeg=" << editorCfg.snapAngleDeg << "\n";
     f << "fovDeg=" << editorCfg.fovDeg << "\n";
     f << "showStats=" << editorCfg.showStats << "\n";
+    f << "uiScale=" << editorCfg.uiScale << "\n";
+    f << "sidebarWidth=" << editorCfg.sidebarWidth << "\n";
+    f << "bottomHeight=" << editorCfg.bottomHeight << "\n";
+    f << "hierarchySplit=" << editorCfg.hierarchySplit << "\n";
     f << "projectDir=" << editorCfg.projectDir << "\n";
     f << "blenderPath=" << editorCfg.blenderPath << "\n";
     f << "lastVersion=" << editorCfg.lastVersion << "\n";

@@ -22,6 +22,19 @@ void duplicateSelectedObject();
 void resetScene();
 int createNode(int type, const std::string& name);   // -1, если сцена заполнена
 
+// --- Узлы во время игры ---
+// Удаление откладывается: destroyNode прячет узел с потомками сразу, а flushDestroyed
+// (раз в кадр, когда не работают ни скрипты, ни физика) освобождает их места.
+void destroyNode(int nodeIdx);
+void flushDestroyed();
+// Копия узла с потомками в виде самостоятельного набора (родители — индексы внутри набора)
+std::vector<SceneNode> copySubtree(int nodeIdx);
+// Вставляет набор узлов в сцену, занимая освобождённые места. Возвращает индекс корня
+// (если корней несколько — общий пустой узел) или -1, когда места не хватает.
+int spawnNodes(std::vector<SceneNode> nodes, int parent = -1);
+// Читает узлы из .nos, не трогая сцену
+bool readSceneNodes(const std::string& path, std::vector<SceneNode>& nodes);
+
 // Hierarchy helpers
 void reparent(int childIdx, int newParentIdx);
 void updateHierarchy(int nodeIdx, mat4 parentWorldMat, bool parentActive = true);

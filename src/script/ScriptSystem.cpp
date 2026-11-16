@@ -111,6 +111,7 @@ void ScriptSystem::bind(Instance& inst, int node, std::shared_ptr<const Program>
     inst.evCollide = program->findFunction("collide", true);
     inst.evEnter = program->findFunction("triggerEnter", true);
     inst.evExit = program->findFunction("triggerExit", true);
+    inst.evMessage = program->findFunction("message", true);
 
     auto assign = [&](size_t index, Type type, const Value& value, const std::string& text) {
         if (type == Type::String) inst.vm.globals[index] = inst.vm.newString(text);
@@ -158,11 +159,12 @@ void ScriptSystem::ensureInstances() {
     for (int i = 0; i < (int)sceneGraph.size(); i++) {
         const std::string& path = sceneGraph[i].script.path;
         if (path.empty()) { instances[i].reset(); continue; }
-        if (instances[i] && instances[i]->path == path) continue;
+        if (instances[i] && instances[i]->path == path && instances[i]->generation == sceneGraph[i].generation) continue;
 
         instances[i] = std::make_unique<Instance>();
         Instance& inst = *instances[i];
         inst.path = path;
+        inst.generation = sceneGraph[i].generation;
         std::error_code ec;
         inst.seen = fs::last_write_time(resolve(path), ec);
         std::vector<CompileError> errors;
@@ -187,6 +189,7 @@ void ScriptSystem::start() {
 }
 
 void ScriptSystem::stop() {
+    mailbox.clear();
     running = false;
     instances.clear();
 }
@@ -221,6 +224,7 @@ void ScriptSystem::update(float dt) {
         }
         report(inst, i);
     }
+    deliverMessages();
 }
 
 void ScriptSystem::fixedUpdate(float dt) {
@@ -229,6 +233,43 @@ void ScriptSystem::fixedUpdate(float dt) {
     for (int i = 0; i < (int)instances.size(); i++) {
         if (instances[i] && instances[i]->started) invoke(i, &Instance::evFixed, &arg, 1);
     }
+}
+
+void ScriptSystem::send(int node, const std::string& name, float value) {
+    if (!running || node < 0 || node >= (int)sceneGraph.size() || mailbox.size() >= 4096) return;
+    mailbox.push_back({ node, sceneGraph[node].generation, name, value });
+}
+
+void ScriptSystem::broadcast(const std::string& name, float value) {
+    for (int i = 0; i < (int)sceneGraph.size(); i++) {
+        if (i < (int)instances.size() && instances[i] && instances[i]->evMessage >= 0) send(i, name, value);
+    }
+}
+
+void ScriptSystem::deliverMessages() {
+    // Обработчик может послать новые сообщения — они уйдут следующим кругом; круги ограничены от зацикливания
+    if (!mailbox.empty()) ensureInstances();   // Получатель мог быть создан в этом же кадре
+    for (int round = 0; round < 8 && !mailbox.empty(); round++) {
+        std::vector<Message> batch;
+        batch.swap(mailbox);
+        for (const Message& m : batch) {
+            if (m.node >= (int)instances.size() || !instances[m.node] || m.node >= (int)sceneGraph.size()) continue;
+            // Получатель удалён, а его место занял другой объект — письмо не ему
+            if (sceneGraph[m.node].generation != m.generation || instances[m.node]->generation != m.generation) continue;
+            Instance& inst = *instances[m.node];
+            if (!inst.program || inst.vm.failed || inst.evMessage < 0) continue;
+            if (!inst.started && sceneGraph[m.node].worldActive) {
+                // Только что созданный объект: start() раньше первого сообщения
+                inst.started = true;
+                int start = inst.program->findFunction("start", true);
+                if (start >= 0) inst.vm.call(start);
+                if (inst.vm.failed) { report(inst, m.node); continue; }
+            }
+            Value args[2] = { inst.vm.newString(m.name), Value::Float(m.value) };
+            invoke(m.node, &Instance::evMessage, args, 2);
+        }
+    }
+    mailbox.clear();
 }
 
 void ScriptSystem::onCollide(int self, int other) {

@@ -1,0 +1,50 @@
+// Ресурсы Windows: иконка и сведения о версии для SDF_Engine.exe и NLSDFE_Player.exe.
+// Версию (NLS_VER_*) и NLS_RC_PLAYER передаёт CMake, см. блок if(WIN32) в CMakeLists.txt.
+#include <winver.h>
+
+#ifndef NLS_VER_MAJOR
+#define NLS_VER_MAJOR 0
+#define NLS_VER_MINOR 0
+#define NLS_VER_PATCH 0
+#endif
+#define NLS_STR2(x) #x
+#define NLS_STR(x) NLS_STR2(x)
+#define NLS_VER_STRING NLS_STR(NLS_VER_MAJOR) "." NLS_STR(NLS_VER_MINOR) "." NLS_STR(NLS_VER_PATCH)
+
+#ifdef NLS_RC_PLAYER
+#define NLS_DESCRIPTION "NLSDFE Player"
+#define NLS_FILENAME "NLSDFE_Player.exe"
+#else
+#define NLS_DESCRIPTION "NLSDFE Editor"
+#define NLS_FILENAME "SDF_Engine.exe"
+#endif
+
+// Первая иконка в файле — её Проводник показывает у .exe
+1 ICON "nlsdfe.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION NLS_VER_MAJOR, NLS_VER_MINOR, NLS_VER_PATCH, 0
+PRODUCTVERSION NLS_VER_MAJOR, NLS_VER_MINOR, NLS_VER_PATCH, 0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"   // английский (США), Unicode
+        BEGIN
+            VALUE "ProductName", "NLSDFE"
+            VALUE "FileDescription", NLS_DESCRIPTION
+            VALUE "InternalName", NLS_DESCRIPTION
+            VALUE "OriginalFilename", NLS_FILENAME
+            VALUE "FileVersion", NLS_VER_STRING
+            VALUE "ProductVersion", NLS_VER_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0
+    END
+END

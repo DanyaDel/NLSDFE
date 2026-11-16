@@ -16,6 +16,16 @@
 #include "App.h"
 #include "imgui.h"
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <cstdio>
+#include <io.h>
+#endif
+
 namespace fs = std::filesystem;
 
 struct PlayerOptions {
@@ -98,6 +108,21 @@ static void printUsage() {
 }
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    // Плеер собран под подсистему GUI (без окна консоли), поэтому при запуске из cmd
+    // подключаемся к консоли родителя, иначе --help и ошибки некуда печатать.
+    // Поток, уже перенаправленный в файл или канал, не трогаем.
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        auto reopen = [](DWORD id, FILE* f) {
+            HANDLE h = GetStdHandle(id);
+            if (h && h != INVALID_HANDLE_VALUE && GetFileType(h) != FILE_TYPE_UNKNOWN) return;
+            // spdlog пишет через GetStdHandle, поэтому обновляем и его
+            if (freopen("CONOUT$", "w", f)) SetStdHandle(id, (HANDLE)_get_osfhandle(_fileno(f)));
+        };
+        reopen(STD_OUTPUT_HANDLE, stdout);
+        reopen(STD_ERROR_HANDLE, stderr);
+    }
+#endif
     PlayerOptions opts;
     try {
         for (int i = 1; i < argc; i++) {

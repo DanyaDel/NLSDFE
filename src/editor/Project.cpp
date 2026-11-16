@@ -1,4 +1,5 @@
 #include "Project.h"
+#include "Panels.h"
 #include "Scene.h"
 #include "Settings.h"
 #include "ScriptSystem.h"
@@ -37,7 +38,7 @@ std::vector<std::string> Project::list(const std::string& subdir, const std::str
 bool openProject(const std::string& directory) {
     std::error_code ec;
     fs::path root = fs::absolute(directory, ec);
-    for (const char* sub : { "assets", "assets/sounds", "scenes", "scripts" }) fs::create_directories(root / sub, ec);
+    for (const char* sub : { "assets", "assets/sounds", "assets/prefabs", "scenes", "scripts", "ui" }) fs::create_directories(root / sub, ec);
     if (!fs::is_directory(root, ec)) { spdlog::error("Cannot open project folder {}", root.string()); return false; }
 
     project = Project();
@@ -82,7 +83,7 @@ std::string importIntoProject(const std::string& file, const std::string& subdir
 }
 
 const char* workspaceName(Workspace ws) {
-    static const char* names[] = { "Model Editor", "Scene Editor", "UV Editor", "Script Editor" };
+    static const char* names[] = { "Model Editor", "Scene Editor", "UV Editor", "Script Editor", "UI Editor" };
     return names[std::clamp((int)ws, 0, (int)WS_COUNT - 1)];
 }
 
@@ -152,6 +153,7 @@ bool editingModel() { return modelActive; }
 void switchWorkspace(Workspace ws) {
     bool needModel = ws == WS_MODEL;
     if (needModel != modelActive) swapDocuments();
+    if (ws != currentWorkspace) stopEditorPreview();
     currentWorkspace = ws;
 }
 

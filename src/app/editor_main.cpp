@@ -201,6 +201,9 @@ public:
             if (ec) return fail(std::string("cannot copy shader ") + shader + ": " + ec.message());
         }
         note("shaders   5 files");
+        // Шрифт интерфейса: без него игра покажет текст встроенным шрифтом ImGui (без кириллицы)
+        fs::copy_file(fs::path(getExecutableDir()) / "ui_font.ttf", out / "ui_font.ttf", fs::copy_options::overwrite_existing, ec);
+        ec.clear();
 
         // Скрипты уходят байткодом: исходники игре не нужны
         std::vector<std::string> done;
@@ -235,6 +238,70 @@ public:
             if (node.meshPath.empty()) continue;
             fs::copy_file(node.meshPath, out / fs::path(node.meshPath).filename(), fs::copy_options::overwrite_existing, ec);
             note("mesh      " + fs::path(node.meshPath).filename().string());
+        }
+
+        // Остальные уровни проекта и их скрипты: на них игра переходит через scene.load()
+        if (!project.root.empty()) {
+            int levels = 0;
+            fs::path scenesDir = fs::path(project.root) / "scenes";
+            if (fs::is_directory(scenesDir, ec)) {
+                for (const auto& entry : fs::directory_iterator(scenesDir, ec)) {
+                    if (entry.path().extension() != ".nos") continue;
+                    fs::create_directories(out / "scenes", ec);
+                    fs::copy_file(entry.path(), out / "scenes" / entry.path().filename(), fs::copy_options::overwrite_existing, ec);
+                    if (!ec) levels++;
+                }
+            }
+            if (levels > 0) note("levels    " + std::to_string(levels) + " in scenes/");
+            fs::path scriptsDir = fs::path(project.root) / "scripts";
+            if (fs::is_directory(scriptsDir, ec)) {
+                for (const auto& entry : fs::recursive_directory_iterator(scriptsDir, ec)) {
+                    std::string ext = entry.path().extension().string();
+                    if (ext != ".nls" && ext != ".nlsg") continue;
+                    std::string script = project.relative(entry.path().string());
+                    if (std::find(done.begin(), done.end(), script) != done.end()) continue;
+                    // Скрипт, не привязанный к текущей сцене, экспорт не останавливает
+                    auto program = nls::scripts.load(script);
+                    if (!program) { note("skipped   " + script + " (does not compile)"); continue; }
+                    fs::path target = (out / script).replace_extension(".nlsc");
+                    fs::create_directories(target.parent_path(), ec);
+                    if (nls::saveProgram(*program, target.string())) note("script    " + fs::relative(target, out, ec).generic_string());
+                }
+            }
+        }
+
+        // Экраны интерфейса, префабы и звуки: скрипты обращаются к ним по имени, по сцене их не найти
+        for (const char* sub : { "ui", "assets/prefabs", "assets/sounds" }) {
+            fs::path from = fs::path(project.root) / sub;
+            if (project.root.empty() || !fs::is_directory(from, ec) || fs::is_empty(from, ec)) continue;
+            fs::create_directories(out / sub, ec);
+            fs::copy(from, out / sub, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+            if (ec) return fail(std::string("cannot copy ") + sub + ": " + ec.message());
+            note(std::string("folder    ") + sub);
+        }
+
+        // Меши остальных уровней и префабов: загрузчик ищет меш рядом с тем .nos, который на него ссылается
+        if (!project.root.empty()) {
+            auto meshLoader = g_meshLoader;
+            g_meshLoader = nullptr;   // Нужны только пути, на GPU ничего не грузим
+            int copied = 0;
+            for (const char* sub : { "scenes", "assets/prefabs" }) {
+                fs::path from = fs::path(project.root) / sub;
+                if (!fs::is_directory(from, ec)) continue;
+                for (const auto& entry : fs::directory_iterator(from, ec)) {
+                    if (entry.path().extension() != ".nos") continue;
+                    std::vector<SceneNode> nodes;
+                    if (!readSceneNodes(entry.path().string(), nodes)) { note("skipped   " + entry.path().filename().string() + " (cannot read)"); continue; }
+                    for (const auto& n : nodes) {
+                        if (n.meshPath.empty() || !fs::exists(n.meshPath, ec)) continue;
+                        fs::create_directories(out / sub, ec);
+                        fs::copy_file(n.meshPath, out / sub / fs::path(n.meshPath).filename(), fs::copy_options::overwrite_existing, ec);
+                        if (!ec) copied++;
+                    }
+                }
+            }
+            g_meshLoader = meshLoader;
+            if (copied > 0) note("meshes    " + std::to_string(copied) + " for levels and prefabs");
         }
 
         std::string previousFile = currentLoadedFile;
@@ -372,7 +439,7 @@ static void printUsage() {
         "  --project <dir>        open a project folder (assets/, scenes/, scripts/)\n"
         "  --demo                 load the demo scene with physics and scripts\n"
         "  --export <dir>         export the game to a folder and exit\n"
-        "  --workspace <0..3>     start in the Model, Scene, UV or Script editor\n"
+        "  --workspace <0..4>     start in the Model, Scene, UV, Script or UI editor\n"
         "  --hold <seconds>       run for a while and exit (UI smoke test)\n"
         "  --open-script <scripts/x.nls|.nlsg>  open a script in the Script Editor\n"
         "  --select <n> --blender-roundtrip    send node n through a background Blender and back\n"

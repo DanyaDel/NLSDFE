@@ -20,6 +20,17 @@ if(NOT Vulkan_FOUND OR NOT Vulkan_INCLUDE_DIR)
     get_target_property(Vulkan_INCLUDE_DIR Vulkan::Headers INTERFACE_INCLUDE_DIRECTORIES)
     set(Vulkan_FOUND TRUE)
     set(Vulkan_LIBRARIES "vulkan") # Assume standard loader is available as libvulkan.so
+    if(MINGW)
+        # У MinGW нет библиотеки импорта для vulkan-1.dll: делаем её из списка экспортов
+        find_program(DLLTOOL_EXECUTABLE NAMES ${CMAKE_DLLTOOL} x86_64-w64-mingw32-dlltool dlltool REQUIRED)
+        set(Vulkan_LIBRARIES ${CMAKE_BINARY_DIR}/libvulkan-1.dll.a)
+        execute_process(
+            COMMAND ${DLLTOOL_EXECUTABLE} -d ${CMAKE_SOURCE_DIR}/cmake/vulkan-1.def -l ${Vulkan_LIBRARIES}
+            RESULT_VARIABLE DLLTOOL_RESULT)
+        if(NOT DLLTOOL_RESULT EQUAL 0)
+            message(FATAL_ERROR "dlltool failed to build the vulkan-1 import library")
+        endif()
+    endif()
 endif()
 
 # --- GLM ---
@@ -124,12 +135,12 @@ target_include_directories(nls_core PUBLIC src/core ${vma_SOURCE_DIR}/include $<
 target_link_libraries(nls_core PUBLIC glm::glm spdlog::spdlog ${NLS_VULKAN_HEADERS})
 
 # scene: граф сцены, SDF на CPU, файлы .nos, камера
-add_library(nls_scene STATIC src/scene/Scene.cpp src/scene/Globals.cpp src/scene/Camera.cpp src/scene/UvTools.cpp src/scene/MeshConvert.cpp src/scene/Json.cpp src/scene/BlenderExchange.cpp)
+add_library(nls_scene STATIC src/scene/Scene.cpp src/scene/Globals.cpp src/scene/Camera.cpp src/scene/UvTools.cpp src/scene/MeshConvert.cpp src/scene/Json.cpp src/scene/BlenderExchange.cpp src/scene/Particles.cpp src/scene/Animation.cpp)
 target_include_directories(nls_scene PUBLIC src/scene)
 target_link_libraries(nls_scene PUBLIC nls_core)
 
 # physics: твёрдые тела на SDF
-add_library(nls_physics STATIC src/physics/Physics.cpp)
+add_library(nls_physics STATIC src/physics/Physics.cpp src/physics/Navigation.cpp)
 target_include_directories(nls_physics PUBLIC src/physics)
 target_link_libraries(nls_physics PUBLIC nls_scene)
 
@@ -147,6 +158,8 @@ add_library(nls_script STATIC
     src/script/Compiler.cpp
     src/script/VM.cpp
     src/script/Bindings.cpp
+    src/script/GameApi.cpp
+    src/script/UiLayout.cpp
     src/script/ScriptSystem.cpp
     src/script/VisualScript.cpp
 )
@@ -178,6 +191,8 @@ add_executable(SDF_Engine
     src/editor/workspaces/UvWorkspace.cpp
     src/editor/workspaces/ScriptWorkspace.cpp
     src/editor/workspaces/GraphEditor.cpp
+    src/editor/workspaces/UiWorkspace.cpp
+    src/editor/workspaces/Timeline.cpp
     src/editor/EngineBridge.cpp
     src/editor/Input.cpp
     src/editor/FileDialogs.cpp
@@ -190,12 +205,39 @@ add_custom_command(TARGET SDF_Engine POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/tools/blender/nlsdfe_link.py $<TARGET_FILE_DIR:SDF_Engine>/nlsdfe_link.py
     COMMENT "Copying the Blender add-on...")
 
+# Шрифт интерфейса (Roboto из поставки ImGui, Apache 2.0) кладётся рядом с исполняемыми файлами
+add_custom_command(TARGET SDF_Engine POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${IMGUI_DIR}/misc/fonts/Roboto-Medium.ttf $<TARGET_FILE_DIR:SDF_Engine>/ui_font.ttf
+    COMMENT "Copying the UI font...")
+
 # Плеер: движок без редактора
 add_executable(NLSDFE_Player src/app/player_main.cpp)
 target_link_libraries(NLSDFE_Player PRIVATE nls_runtime)
 
+# Windows: иконка и сведения о версии в обоих .exe, плеер без окна консоли
+if(WIN32)
+    set(NLS_WIN_RC ${CMAKE_SOURCE_DIR}/assets/windows/nlsdfe.rc)
+    # Версия берётся из ENGINE_VERSION, чтобы не держать её в двух местах
+    file(STRINGS ${CMAKE_SOURCE_DIR}/src/core/Common.h NLS_VERSION_LINE REGEX "ENGINE_VERSION *= *\"v[0-9]+\\.[0-9]+\\.[0-9]+\"")
+    if(NLS_VERSION_LINE MATCHES "v([0-9]+)\\.([0-9]+)\\.([0-9]+)")
+        set_source_files_properties(${NLS_WIN_RC} PROPERTIES COMPILE_DEFINITIONS
+            "NLS_VER_MAJOR=${CMAKE_MATCH_1};NLS_VER_MINOR=${CMAKE_MATCH_2};NLS_VER_PATCH=${CMAKE_MATCH_3}")
+    endif()
+    # windres ищет nlsdfe.ico по путям -I, а не рядом с .rc
+    set_source_files_properties(${NLS_WIN_RC} PROPERTIES INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/assets/windows)
+    target_sources(SDF_Engine PRIVATE ${NLS_WIN_RC})
+    target_sources(NLSDFE_Player PRIVATE ${NLS_WIN_RC})
+    target_compile_definitions(NLSDFE_Player PRIVATE $<$<COMPILE_LANGUAGE:RC>:NLS_RC_PLAYER>)
+    # Подсистема GUI, но точка входа остаётся обычным main(argc, argv)
+    if(MSVC)
+        target_link_options(NLSDFE_Player PRIVATE /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup)
+    else()
+        target_link_options(NLSDFE_Player PRIVATE -mwindows)
+    endif()
+endif()
+
 # Тесты без окна и GPU
-add_executable(nls_tests tests/tests_main.cpp tests/test_scene.cpp tests/test_physics.cpp tests/test_script.cpp tests/test_convert.cpp tests/test_visual.cpp tests/test_blender.cpp)
+add_executable(nls_tests tests/tests_main.cpp tests/test_scene.cpp tests/test_physics.cpp tests/test_script.cpp tests/test_convert.cpp tests/test_visual.cpp tests/test_blender.cpp tests/test_game.cpp)
 target_link_libraries(nls_tests PRIVATE nls_scene nls_physics nls_script)
 enable_testing()
 add_test(NAME nls_tests COMMAND nls_tests)

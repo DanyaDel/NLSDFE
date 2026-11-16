@@ -60,6 +60,7 @@ namespace {
         {"collide", "On Collide", {{"other", Type::Node}}},
         {"triggerEnter", "On Trigger Enter", {{"other", Type::Node}}},
         {"triggerExit", "On Trigger Exit", {{"other", Type::Node}}},
+        {"message", "On Message", {{"name", Type::String}, {"value", Type::Float}}},
     };
 
     std::vector<NodeDef> builtins() {

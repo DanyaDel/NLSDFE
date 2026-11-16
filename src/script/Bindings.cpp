@@ -1,4 +1,5 @@
 #include "ScriptSystem.h"
+#include "GameApi.h"
 #include "Scene.h"
 #include "Physics.h"
 #include "Audio.h"
@@ -84,8 +85,6 @@ void registerEngineBindings() {
     // ---------------- Методы узла ----------------
     r.function("node.applyImpulse", T::Void, {T::Node, T::Vec3}, [](VM& vm, Value* a, Value&) { if (nodeOf(vm, a[0])) physics::applyImpulse(a[0].i, vec(a[1])); });
     r.function("node.wake", T::Void, {T::Node}, [](VM& vm, Value* a, Value&) { if (nodeOf(vm, a[0])) physics::wake(a[0].i); });
-    // Узлы не удаляются во время игры (индексы должны оставаться верными) — только прячутся
-    r.function("node.destroy", T::Void, {T::Node}, NODE_SET(n->active = false));
     r.function("node.distanceTo", T::Float, {T::Node, T::Node}, [](VM& vm, Value* a, Value& res) {
         SceneNode* n = nodeOf(vm, a[0]); SceneNode* o = nodeOf(vm, a[1]);
         if (n && o) res = Value::Float(glm::distance(vec3(n->gpuData.position), vec3(o->gpuData.position)));
@@ -99,19 +98,6 @@ void registerEngineBindings() {
     });
     r.function("scene.count", T::Int, {}, FN(r = Value::Int((int)sceneGraph.size())));
     r.function("scene.get", T::Node, {T::Int}, FN(r = Value::Int(a[0].i >= 0 && a[0].i < (int)sceneGraph.size() ? a[0].i : -1)));
-    r.function("scene.spawn", T::Node, {T::Node}, [](VM& vm, Value* a, Value& res) {
-        if (!nodeOf(vm, a[0])) return;
-        res = Value::Int(-1);
-        if (sceneGraph.size() >= MAX_OBJECTS) return;
-        SceneNode copy = sceneGraph[a[0].i];
-        copy.children.clear();
-        copy.active = true;
-        copy.body.sleeping = false;
-        int index = (int)sceneGraph.size();
-        sceneGraph.push_back(copy);
-        if (copy.parent >= 0) sceneGraph[copy.parent].children.push_back(index);
-        res = Value::Int(index);
-    });
 
     // ---------------- Ввод, время, игрок ----------------
     r.function("input.down", T::Bool, {T::String}, FN(r = Value::Int(host.keyDown && host.keyDown(vm.string(a[0])) ? 1 : 0)));
@@ -135,6 +121,9 @@ void registerEngineBindings() {
         r = Value::Float(physics::raycast(vec(a[0]), vec(a[1]), a[2].f, hit) ? hit.distance : -1.0f)));
     r.function("physics.gravity", T::Vec3, {}, FN(r = val(physics::gravity)));
     r.function("physics.setGravity", T::Void, {T::Vec3}, FN(physics::gravity = vec(a[0])));
+
+    // ---------------- Интерфейс, переходы, сохранения, сцены ----------------
+    game::registerBindings();
 
     // ---------------- Вывод ----------------
     r.function("log", T::Void, {T::String}, FN(scripts.print(vm.string(a[0]))));

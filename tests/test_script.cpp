@@ -1,5 +1,6 @@
 #include "TestUtil.h"
 #include "ScriptSystem.h"
+#include "GameApi.h"
 #include "Scene.h"
 #include "Physics.h"
 #include <filesystem>
@@ -245,6 +246,96 @@ void runScriptTests() {
         scripts.stop();
         scripts.rootDir.clear();
         std::filesystem::remove_all(dir);
+    }
+
+    TEST_SECTION("script: game services");
+    resetScene();
+    updateSceneCaches();
+    game::reset();
+    {
+        // Сохранения переживают перезапуск: запись, сброс на диск, чтение заново
+        std::string file = (std::filesystem::temp_directory_path() / "nlsdfe_save_test.dat").string();
+        std::filesystem::remove(file);
+        game::setSaveFile(file);
+        CHECK_NEAR(evalFloat("return save.getFloat(\"best\", 7.5)"), 7.5, 1e-6);
+        CHECK(evalBool("save.setFloat(\"best\", 12.25)\n save.setInt(\"level\", 3)\n save.setString(\"name\", \"a=b\\\\c\")\n return save.has(\"level\")"));
+        CHECK(game::flushSave());
+        game::setSaveFile(file);
+        CHECK_NEAR(evalFloat("return save.getFloat(\"best\", 0.0)"), 12.25, 1e-6);
+        CHECK(evalInt("return save.getInt(\"level\", 0)") == 3);
+        CHECK(evalString("return save.getString(\"name\", \"\")") == "a=b\\c");
+        CHECK(!evalBool("save.remove(\"level\")\n return save.has(\"level\")"));
+        CHECK(evalInt("save.clear()\n return save.getInt(\"level\", -1)") == -1);
+        std::filesystem::remove(file);
+        game::setSaveFile("");
+
+        // Переходы: середина пути на половине времени, точно в цели в конце
+        sceneGraph[0].localPosition = vec3(0.0f);
+        CHECK(evalBool("scene.get(0).moveTo(vec3(2, 4, 6), 1.0)\n return scene.get(0).isMoving()"));
+        game::updateTweens(0.5f);
+        CHECK_NEAR(sceneGraph[0].localPosition.y, 2.0, 1e-4);
+        game::updateTweens(0.6f);
+        CHECK_NEAR(sceneGraph[0].localPosition.z, 6.0, 1e-5);
+        CHECK(game::activeTweens() == 0);
+        // Новый переход того же свойства заменяет старый; нулевая длительность — мгновенно
+        evalBool("scene.get(0).moveTo(vec3(9, 9, 9), 5.0)\n scene.get(0).moveTo(vec3(1, 1, 1), 0.0)\n scene.get(0).scaleTo(vec3(2, 2, 2), 1.0)\n return true");
+        CHECK(game::activeTweens() == 1);
+        CHECK_NEAR(sceneGraph[0].localPosition.x, 1.0, 1e-6);
+        game::updateTweens(2.0f);
+        CHECK_NEAR(sceneGraph[0].localScale.x, 2.0, 1e-5);
+
+        // lookAt и forward согласованы
+        sceneGraph[0].localPosition = vec3(0.0f);
+        sceneGraph[0].localScale = vec3(1.0f);
+        updateSceneCaches();
+        CHECK_NEAR(evalFloat("scene.get(0).lookAt(vec3(3, 0, 0))\n return scene.get(0).forward().x"), 1.0, 1e-4);
+        CHECK_NEAR(evalFloat("scene.get(0).lookAt(vec3(0, 5, -5))\n return scene.get(0).forward().y"), std::sqrt(0.5), 1e-4);
+
+        // Интерфейс: элементы копятся за кадр, кнопка срабатывает под курсором в кадр щелчка
+        game::beginFrame();
+        game::state.mouseX = 0.5f; game::state.mouseY = 0.5f; game::state.mouseDown = true; game::state.mousePressed = true;
+        CHECK(evalBool("ui.text(\"Score\", 0.1, 0.1, 24.0, vec3(1, 1, 1))\n ui.bar(0.1, 0.2, 0.3, 0.05, 1.7, vec3(1, 0, 0))\n return ui.button(\"Play\", 0.4, 0.4, 0.2, 0.2)"));
+        CHECK(game::state.hud.size() == 3);
+        if (game::state.hud.size() == 3) {
+            CHECK(game::state.hud[0].text == "Score");
+            CHECK_NEAR(game::state.hud[1].value, 1.0, 1e-6);      // Заполнение обрезается до 0..1
+            CHECK(game::state.hud[2].text == "Play");
+        }
+        CHECK(!evalBool("return ui.button(\"Far\", 0.8, 0.8, 0.1, 0.1)"));
+        game::state.mousePressed = false;
+        CHECK(!evalBool("return ui.button(\"Play\", 0.4, 0.4, 0.2, 0.2)"));
+        game::beginFrame();
+        CHECK(game::state.hud.empty());
+
+        // Оси ввода, таймер, запросы сцены
+        auto savedKeyDown = host.keyDown;
+        host.keyDown = [](const std::string& key) { return key == "d" || key == "s"; };
+        CHECK_NEAR(evalFloat("return input.axis(\"horizontal\")"), 1.0, 1e-6);
+        CHECK_NEAR(evalFloat("return input.axis(\"vertical\")"), -1.0, 1e-6);
+        host.keyDown = savedKeyDown;
+        std::string error;
+        Value v;
+        CHECK(!run("func test() -> float { return input.axis(\"jump\") }", v, &error) && contains(error, "unknown axis"));
+
+        host.time = 2.01f; host.delta = 0.02f;
+        CHECK(evalBool("return time.every(1.0)"));
+        host.time = 2.5f;
+        CHECK(!evalBool("return time.every(1.0)"));
+        host.time = 0.0f; host.delta = 0.0f;
+
+        CHECK_NEAR(evalFloat("time.setScale(0.25)\n return time.scale()"), 0.25, 1e-6);
+        evalBool("scene.load(\"level2\")\n game.quit()\n return true");
+        CHECK(game::state.pendingScene == "level2" && game::state.quitRequested);
+        // Пример из README собирается как есть
+        CHECK(compileError(
+            "var hp: float = 1.0\n"
+            "on update(dt: float) {\n"
+            "    ui.bar(0.03, 0.04, 0.25, 0.03, hp, vec3(0.9, 0.2, 0.2))\n"
+            "    ui.text(\"Best: \" + str(save.getInt(\"best\", 0)), 0.03, 0.09, 22.0, vec3(1, 1, 1))\n"
+            "    if hp <= 0.0 and ui.button(\"Restart\", 0.4, 0.45, 0.2, 0.08) { scene.restart() }\n"
+            "}\n") == "");
+        game::reset();
+        CHECK(game::state.pendingScene.empty() && !game::state.quitRequested && game::state.timeScale == 1.0f);
     }
 
     spdlog::set_level(spdlog::level::info);
